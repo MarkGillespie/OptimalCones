@@ -43,22 +43,121 @@ ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
     return computeOptimalMeasure(u, phi, lambda);
 }
 
+cholmod_sparse* stolen_toCholmod(SparseMatrix<double>& A,
+                                 CholmodContext& context, SType stype) {
+
+    A.makeCompressed();
+
+    // Allocate spase
+    size_t Nentries = A.nonZeros();
+    size_t Ncols    = A.cols();
+    size_t Nrows    = A.rows();
+
+    cholmod_sparse* cMat = cholmod_l_allocate_sparse(
+        Nrows, Ncols, Nentries, true, true, 0, CHOLMOD_REAL, context);
+
+    // Pull out useful pointers
+    double* values               = (double*)cMat->x;
+    SuiteSparse_long* rowIndices = (SuiteSparse_long*)cMat->i;
+    SuiteSparse_long* colStart   = (SuiteSparse_long*)cMat->p;
+
+    // Copy
+    for (size_t iEntry = 0; iEntry < Nentries; iEntry++) {
+        values[iEntry]     = A.valuePtr()[iEntry];
+        rowIndices[iEntry] = A.innerIndexPtr()[iEntry];
+    }
+    for (size_t iCol = 0; iCol < Ncols; iCol++) {
+        colStart[iCol] = A.outerIndexPtr()[iCol];
+    }
+    colStart[Ncols] = Nentries;
+
+    return cMat;
+}
+
+void stolen_umfSolve(size_t N, cholmod_sparse* mat, Vector<double>& x,
+                     const Vector<double>& rhs) {
+    SuiteSparse_long* cMat_p = (SuiteSparse_long*)mat->p;
+    SuiteSparse_long* cMat_i = (SuiteSparse_long*)mat->i;
+    double* cMat_x           = (double*)mat->x;
+
+    void* symbolicFac = nullptr;
+    void* numericFac  = nullptr;
+    umfpack_dl_symbolic(N, N, cMat_p, cMat_i, cMat_x, &symbolicFac, NULL, NULL);
+    umfpack_dl_numeric(cMat_p, cMat_i, cMat_x, symbolicFac, &numericFac, NULL,
+                       NULL);
+
+    x = Vector<double>(N);
+    umfpack_dl_solve(UMFPACK_A, cMat_p, cMat_i, cMat_x, &(x[0]), &(rhs[0]),
+                     numericFac, NULL, NULL);
+}
+
 std::array<Vector<double>, 2>
 ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
                                       double lambda, double gamma) {
     size_t n             = mesh.nVertices();
     double residualNorm2 = 100;
 
+    /*
+    CholmodContext context;
+    cholmod_sparse* cMat = nullptr;
+    void* symbolicFac    = nullptr;
+    void* numericFac     = nullptr;
+
+    SparseMatrix<double> DF = computeRegularizedDF(u, phi, lambda, gamma);
+    cMat                    = stolen_toCholmod(DF, context, SType::UNSYMMETRIC);
+
+    DF.makeCompressed();
+    size_t nRows = DF.rows();
+    size_t nCols = DF.cols();
+    size_t nnz   = DF.nonZeros();
+
+    double* values               = (double*)cMat->x;
+    SuiteSparse_long* rowIndices = (SuiteSparse_long*)cMat->i;
+    SuiteSparse_long* colStart   = (SuiteSparse_long*)cMat->p;
+
+    // Record which entries are in the upper right corner
+    std::vector<size_t> dPositions;
+    dPositions.reserve(n);
+    for (size_t iCol = n; iCol < nCols; ++iCol) {
+        size_t cStart = colStart[iCol];
+        size_t cEnd   = colStart[iCol + 1];
+        for (size_t iEntry = cStart; iEntry < cEnd; ++iEntry) {
+            if (rowIndices[iEntry] < (SuiteSparse_long)n) {
+                dPositions.push_back(iEntry);
+            }
+        }
+    }
+
+    SuiteSparse_long N       = nRows;
+    SuiteSparse_long* cMat_p = (SuiteSparse_long*)cMat->p;
+    SuiteSparse_long* cMat_i = (SuiteSparse_long*)cMat->i;
+    double* cMat_x           = (double*)cMat->x;
+    umfpack_dl_symbolic(N, N, cMat_p, cMat_i, cMat_x, &symbolicFac, NULL, NULL);
+    */
+
     size_t iter = 0;
     while (residualNorm2 > 1e-5 && iter++ < 50) {
-        Vector<double> b = regularizedResidual(u, phi, lambda, gamma);
+        Vector<double> b = -regularizedResidual(u, phi, lambda, gamma);
 
-        SparseMatrix<double> DF = -computeRegularizedDF(u, phi, lambda, gamma);
+        /*
+        std::vector<double> newDiag = Dvec(phi, lambda);
 
-        SquareSolver<double> solver(DF);
+        for (size_t iV = 0; iV < n; ++iV)
+            cMat_x[dPositions[iV]] = newDiag[iV] / gamma;
 
-        std::vector<Vector<double>> step =
-            unstackVectors(solver.solve(b), {n, n});
+        Vector<double> stackedStep(nRows);
+
+        umfpack_dl_numeric(cMat_p, cMat_i, cMat_x, symbolicFac, &numericFac,
+                           NULL, NULL);
+
+        umfpack_dl_solve(UMFPACK_A, cMat_p, cMat_i, cMat_x, &(stackedStep[0]),
+                         &(b[0]), numericFac, NULL, NULL);
+        */
+
+        SparseMatrix<double> DF = computeRegularizedDF(u, phi, lambda, gamma);
+        Vector<double> stackedStep = solveSquare(DF, b);
+
+        std::vector<Vector<double>> step = unstackVectors(stackedStep, {n, n});
 
         u += step[0];
         phi += step[1];
@@ -67,6 +166,11 @@ ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
         if (verbose)
             cout << "\t\t" << iter << "\t| residual: " << residualNorm2 << endl;
     }
+
+    // Free Cholmod stuff
+    // if (cMat != nullptr) cholmod_l_free_sparse(&cMat, context);
+    // if (symbolicFac != nullptr) umfpack_dl_free_symbolic(&symbolicFac);
+    // if (numericFac != nullptr) umfpack_dl_free_numeric(&numericFac);
 
     return {u, phi};
 }
@@ -83,12 +187,12 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
 
         Vector<double> b = residual(u, phi, mu, lambda);
 
-        SparseMatrix<double> DF = -computeDF(u, phi, mu, lambda);
+        SparseMatrix<double> DF = computeDF(u, phi, mu, lambda);
 
         SquareSolver<double> solver(DF);
 
         std::vector<Vector<double>> step =
-            unstackVectors(solver.solve(b), {n, n, n});
+            unstackVectors(solver.solve(-b), {n, n, n});
 
         u += step[0];
         phi += step[1];
@@ -167,19 +271,32 @@ Vector<double> ConePlacer::proj(Vector<double> x, double lambda) {
 
 SparseMatrix<double> ConePlacer::D(const Vector<double>& x, double lambda) {
     std::vector<Eigen::Triplet<double>> T;
-    for (size_t iV = 0; iV < (size_t)x.rows(); ++iV) {
-        if (x(iV) > lambda || x(iV) < -lambda) {
-            T.emplace_back(iV, iV, 1);
-        }
-        // if (-lambda <= x(iV) && x(iV) < lambda) {
-        //     T.emplace_back(iV, iV, 1);
-        // }
-    }
-    size_t n = mesh.nVertices();
+
+    std::vector<double> diag = Dvec(x, lambda);
+    size_t n                 = mesh.nVertices();
+
+    for (size_t iE = 0; iE < n; ++iE) T.emplace_back(iE, iE, diag[iE]);
+
     SparseMatrix<double> M(n, n);
     M.setFromTriplets(std::begin(T), std::end(T));
 
     return M;
+}
+
+std::vector<double> ConePlacer::Dvec(const Vector<double>& x, double lambda) {
+    std::vector<double> result;
+    for (size_t iV = 0; iV < (size_t)x.rows(); ++iV) {
+        if (x(iV) > lambda || x(iV) < -lambda) {
+            result.push_back(1);
+        } else {
+            // Push 0s to maintain sparsity pattern
+            result.push_back(0);
+        }
+        // if (-lambda <= x(iV) && x(iV) < lambda) {
+        //     result.push_back(1);
+        // }
+    }
+    return result;
 }
 
 Vector<double> stackVectors(const std::vector<Vector<double>>& vs) {
