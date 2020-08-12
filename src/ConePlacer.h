@@ -3,10 +3,6 @@
 #include "geometrycentral/surface/manifold_surface_mesh.h"
 #include "geometrycentral/surface/vertex_position_geometry.h"
 
-// Cholmod square factorization
-#include "geometrycentral/numerical/suitesparse_utilities.h"
-#include <umfpack.h>
-
 using namespace geometrycentral;
 using namespace geometrycentral::surface;
 
