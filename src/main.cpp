@@ -1,6 +1,8 @@
-#include "geometrycentral/surface/halfedge_mesh.h"
+#include "geometrycentral/surface/manifold_surface_mesh.h"
 #include "geometrycentral/surface/meshio.h"
 #include "geometrycentral/surface/vertex_position_geometry.h"
+
+#include "ConePlacer.h"
 
 #include "polyscope/polyscope.h"
 #include "polyscope/surface_mesh.h"
@@ -12,7 +14,7 @@ using namespace geometrycentral;
 using namespace geometrycentral::surface;
 
 // == Geometry-central data
-std::unique_ptr<HalfedgeMesh> mesh;
+std::unique_ptr<ManifoldSurfaceMesh> mesh;
 std::unique_ptr<VertexPositionGeometry> geometry;
 
 // Polyscope visualization handle, to quickly add data to the surface
@@ -21,7 +23,22 @@ polyscope::SurfaceMesh* psMesh;
 // A user-defined callback, for creating control panels (etc)
 // Use ImGUI commands to build whatever you want here, see
 // https://github.com/ocornut/imgui/blob/master/imgui.h
-void myCallback() {}
+void myCallback() {
+    static float lambda = 0.5;
+    ImGui::SliderFloat("lambda", &lambda, 0.f, 10.f, "lambda=%.3f");
+
+    if (ImGui::Button("Place Cones")) {
+        ConePlacer pl(*mesh, *geometry);
+        pl.setVerbose(true);
+
+        VertexData<double> u, phi, mu;
+        std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, 8);
+
+        psMesh->addVertexScalarQuantity("u", u);
+        psMesh->addVertexScalarQuantity("phi", phi);
+        psMesh->addVertexScalarQuantity("mu", mu);
+    }
+}
 
 int main(int argc, char** argv) {
 
