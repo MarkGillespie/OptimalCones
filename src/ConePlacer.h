@@ -2,6 +2,9 @@
 #include "geometrycentral/numerical/linear_solvers.h"
 #include "geometrycentral/surface/manifold_surface_mesh.h"
 #include "geometrycentral/surface/vertex_position_geometry.h"
+#include "geometrycentral/utilities/utilities.h" // RandomReal
+
+#include <deque>
 
 using namespace geometrycentral;
 using namespace geometrycentral::surface;
@@ -18,6 +21,14 @@ class ConePlacer {
 
     std::array<VertexData<double>, 3>
     computeOptimalMeasure(double lambda = 1, size_t regularizedSteps = 4);
+
+    VertexData<double> contractClusters(const VertexData<double>& x);
+    VertexData<double> pruneSmallCones(const VertexData<double>& mu,
+                                       double threshold = 0.5);
+
+    VertexData<double> pruneSmallCones(VertexData<double> mu,
+                                       double positiveThreshold,
+                                       double negativeThreshold);
 
     void setVerbose(bool verb);
 
@@ -49,6 +60,10 @@ class ConePlacer {
     std::vector<double> Dvec(const Vector<double>& x, double lambda);
 
     Vector<double> proj(Vector<double> x, double lambda);
+
+    bool checkSubdifferential(const Vector<double>& mu,
+                              const Vector<double>& phi, double lambda,
+                              size_t trials = 50);
 
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;

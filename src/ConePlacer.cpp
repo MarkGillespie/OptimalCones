@@ -43,6 +43,92 @@ ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
     return computeOptimalMeasure(u, phi, lambda);
 }
 
+VertexData<double> ConePlacer::contractClusters(const VertexData<double>& x) {
+    double tol = 1e-12;
+    VertexData<bool> visited(mesh, false);
+    VertexData<double> contracted(mesh, 0);
+
+    auto contractCluster = [&](Vertex v) {
+        if (visited[v] || abs(x[v]) < tol) {
+            visited[v] = true;
+            return;
+        }
+
+        Vertex mode       = v;
+        double clusterSum = 0;
+
+        std::deque<Vertex> clusterVertices;
+        clusterVertices.push_back(v);
+        visited[v] = true;
+
+        while (!clusterVertices.empty()) {
+            Vertex v = clusterVertices.front();
+            clusterVertices.pop_front();
+
+            if (abs(x[v]) >= tol) {
+                clusterSum += x[v];
+                if (abs(x[v]) > abs(x[mode])) mode = v;
+                for (Vertex w : v.adjacentVertices()) {
+                    if (!visited[w]) {
+                        clusterVertices.push_back(w);
+                        visited[w] = true;
+                    }
+                }
+            }
+        }
+
+        contracted[mode] = clusterSum;
+    };
+
+    for (Vertex v : mesh.vertices()) {
+        contractCluster(v);
+    }
+
+    return contracted;
+}
+
+VertexData<double> ConePlacer::pruneSmallCones(const VertexData<double>& mu,
+                                               double threshold) {
+    return pruneSmallCones(mu, threshold, threshold);
+}
+
+VertexData<double> ConePlacer::pruneSmallCones(VertexData<double> mu,
+                                               double positiveThreshold,
+                                               double negativeThreshold) {
+    double maxCone = 0;
+    double minCone = 0;
+    for (Vertex v : mesh.vertices()) {
+        maxCone = fmax(maxCone, mu[v]);
+        minCone = fmin(minCone, mu[v]);
+    }
+
+    double targetConeSum = 2 * M_PI * mesh.eulerCharacteristic();
+    double coneSum       = 0;
+    for (Vertex v : mesh.vertices()) {
+        if (mu[v] > 0) {
+            if (mu[v] < positiveThreshold * maxCone) {
+                mu[v] = 0;
+            } else {
+                coneSum += mu[v];
+            }
+        } else if (mu[v] < 0) {
+            if (mu[v] > negativeThreshold * minCone) {
+                mu[v] = 0;
+            } else {
+                coneSum += mu[v];
+            }
+        }
+    }
+
+    for (Vertex v : mesh.vertices()) {
+        mu[v] *= targetConeSum / coneSum;
+    }
+
+    return mu;
+}
+
+void ConePlacer::setVerbose(bool verb) { verbose = verb; }
+
 std::array<Vector<double>, 2>
 ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
                                       double lambda, double gamma) {
@@ -100,6 +186,8 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
 
     Vector<double> r = residual(u, phi, mu, lambda);
     if (verbose) cout << "\t final residual: " << r.lpNorm<2>() << endl;
+
+    checkSubdifferential(mu, phi, lambda);
 
     VertexData<double> uData(mesh, u);
     VertexData<double> phiData(mesh, phi);
@@ -168,7 +256,9 @@ SparseMatrix<double> ConePlacer::D(const Vector<double>& x, double lambda) {
     std::vector<double> diag = Dvec(x, lambda);
     size_t n                 = mesh.nVertices();
 
-    for (size_t iE = 0; iE < n; ++iE) T.emplace_back(iE, iE, diag[iE]);
+    for (size_t iE = 0; iE < n; ++iE) {
+        if (abs(diag[iE]) > 1e-12) T.emplace_back(iE, iE, diag[iE]);
+    }
 
     SparseMatrix<double> M(n, n);
     M.setFromTriplets(std::begin(T), std::end(T));
@@ -181,9 +271,33 @@ std::vector<double> ConePlacer::Dvec(const Vector<double>& x, double lambda) {
     for (size_t iV = 0; iV < (size_t)x.rows(); ++iV) {
         if (x(iV) > lambda || x(iV) < -lambda) {
             result.push_back(1);
+        } else {
+            result.push_back(0);
         }
     }
     return result;
+}
+
+bool ConePlacer::checkSubdifferential(const Vector<double>& mu,
+                                      const Vector<double>& phi, double lambda,
+                                      size_t trials) {
+    Vector<double> psi(mesh.nVertices());
+    for (size_t iT = 0; iT < trials; ++iT) {
+        for (size_t iV = 0; iV < mesh.nVertices(); ++iV) {
+            psi(iV) = (mu(iV) > 0) ? lambda : -lambda;
+            // psi(iV) = randomReal(-lambda, lambda);
+        }
+
+        // Subdifferential condition says for all psi, mu(psi) <= mu(phi)
+        double err = mu.dot(psi) - mu.dot(phi);
+
+        if (err > 1e-8) {
+            cerr << "Not a subdifferential after all" << endl;
+            exit(1);
+        }
+    }
+
+    return true;
 }
 
 Vector<double> stackVectors(const std::vector<Vector<double>>& vs) {
@@ -214,5 +328,3 @@ std::vector<Vector<double>> unstackVectors(const Vector<double>& bigV,
     }
     return unstack;
 }
-
-void ConePlacer::setVerbose(bool verb) { verbose = verb; }

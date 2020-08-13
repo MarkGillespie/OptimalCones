@@ -25,7 +25,7 @@ polyscope::SurfaceMesh* psMesh;
 // https://github.com/ocornut/imgui/blob/master/imgui.h
 void myCallback() {
     static float lambda = 0.5;
-    ImGui::SliderFloat("lambda", &lambda, 0.f, 10.f, "lambda=%.3f");
+    ImGui::SliderFloat("lambda", &lambda, 0.f, 1.f, "lambda=%.3f");
 
     if (ImGui::Button("Place Cones")) {
         ConePlacer pl(*mesh, *geometry);
@@ -34,9 +34,14 @@ void myCallback() {
         VertexData<double> u, phi, mu;
         std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, 8);
 
+        VertexData<double> muSparse       = pl.contractClusters(mu);
+        VertexData<double> muSparsePruned = pl.pruneSmallCones(muSparse);
+
         psMesh->addVertexScalarQuantity("u", u);
         psMesh->addVertexScalarQuantity("phi", phi);
         psMesh->addVertexScalarQuantity("mu", mu);
+        psMesh->addVertexScalarQuantity("muSparse", muSparse);
+        psMesh->addVertexScalarQuantity("muSparsePruned", muSparsePruned);
     }
 }
 
