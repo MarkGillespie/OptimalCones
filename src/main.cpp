@@ -35,7 +35,7 @@ void myCallback() {
         std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, 8);
 
         VertexData<double> muSparse       = pl.contractClusters(mu);
-        VertexData<double> muSparsePruned = pl.pruneSmallCones(muSparse);
+        VertexData<double> muSparsePruned = pl.pruneSmallCones(muSparse, 0.05);
 
         psMesh->addVertexScalarQuantity("u", u);
         psMesh->addVertexScalarQuantity("phi", phi);

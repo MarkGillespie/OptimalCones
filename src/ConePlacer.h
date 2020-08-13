@@ -59,6 +59,9 @@ class ConePlacer {
     SparseMatrix<double> D(const Vector<double>& x, double lambda);
     std::vector<double> Dvec(const Vector<double>& x, double lambda);
 
+    double muSum(const Vector<double>& mu);
+    Vector<double> normalizeMuSum(const Vector<double>& mu);
+
     Vector<double> proj(Vector<double> x, double lambda);
 
     bool checkSubdifferential(const Vector<double>& mu,

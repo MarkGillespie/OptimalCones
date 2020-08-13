@@ -178,6 +178,8 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
         phi += step[1];
         mu += step[2];
 
+        mu = normalizeMuSum(mu);
+
         residualNorm2 = step[0].squaredNorm() + step[1].squaredNorm() +
                         step[2].squaredNorm();
         if (verbose)
@@ -240,6 +242,17 @@ SparseMatrix<double> ConePlacer::computeRegularizedDF(const Vector<double>& u,
     SparseMatrix<double> bot = horizontalStack<double>({-Mii, Lii.transpose()});
 
     return verticalStack<double>({top, bot});
+}
+
+double ConePlacer::muSum(const Vector<double>& mu) {
+    double sum = 0;
+    for (size_t iV = 0; iV < (size_t)mu.rows(); ++iV) sum += mu(iV);
+    return sum;
+}
+
+Vector<double> ConePlacer::normalizeMuSum(const Vector<double>& mu) {
+    double targetSum = 2 * M_PI * mesh.eulerCharacteristic();
+    return targetSum / muSum(mu) * mu;
 }
 
 Vector<double> ConePlacer::proj(Vector<double> x, double lambda) {
