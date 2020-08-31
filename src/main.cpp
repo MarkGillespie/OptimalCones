@@ -4,6 +4,7 @@
 
 #include "ConePlacer.h"
 
+#include "polyscope/point_cloud.h"
 #include "polyscope/polyscope.h"
 #include "polyscope/surface_mesh.h"
 
@@ -32,7 +33,7 @@ void myCallback() {
         pl.setVerbose(true);
 
         VertexData<double> u, phi, mu;
-        std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, 8);
+        std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, 12);
 
         VertexData<double> muSparse       = pl.contractClusters(mu);
         VertexData<double> muSparsePruned = pl.pruneSmallCones(muSparse, 0.05);
@@ -79,6 +80,21 @@ int main(int argc, char** argv) {
     // Load mesh
     std::tie(mesh, geometry) = loadMesh(filename);
     std::cout << "Genus: " << mesh->genus() << std::endl;
+
+    // Rescale to have unit surface area
+    double surfaceArea = 0;
+    geometry->requireFaceAreas();
+    for (Face f : mesh->faces()) surfaceArea += geometry->faceAreas[f];
+    double r = sqrt(surfaceArea);
+
+    for (Vertex v : mesh->vertices()) {
+        geometry->inputVertexPositions[v] /= r;
+    }
+
+    geometry->refreshQuantities();
+    surfaceArea = 0;
+    for (Face f : mesh->faces()) surfaceArea += geometry->faceAreas[f];
+    std::cout << "Surface area: " << surfaceArea << endl;
 
     // Register the mesh with polyscope
     psMesh = polyscope::registerSurfaceMesh(

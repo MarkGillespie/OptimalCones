@@ -4,14 +4,67 @@ ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
     : mesh(mesh_), geo(geo_) {
     vIdx = mesh.getVertexIndices();
 
+    Vector<bool> isInterior(mesh.nVertices());
+    for (Vertex v : mesh.vertices()) {
+        isInterior(vIdx[v]) = !v.isBoundary();
+    }
+
     geo.requireCotanLaplacian();
-    Lii = geo.cotanLaplacian;
+    SparseMatrix<double> L = geo.cotanLaplacian;
+    BlockDecompositionResult<double> Ldecomp =
+        blockDecomposeSquare(L, isInterior);
+    Lii = Ldecomp.AA;
 
     geo.requireVertexLumpedMassMatrix();
-    Mii = geo.vertexLumpedMassMatrix;
+    SparseMatrix<double> M = geo.vertexLumpedMassMatrix;
+    BlockDecompositionResult<double> Mdecomp =
+        blockDecomposeSquare(M, isInterior);
+    Mii = Mdecomp.AA;
+
+    std::cout << "L rows: " << L.rows() << "\tLii rows: " << Lii.rows()
+              << "\t M rows: " << Mii.rows()
+              << "\tnInteriorVertices: " << mesh.nInteriorVertices() << endl;
 
     geo.requireVertexGaussianCurvatures();
-    Omega = geo.vertexGaussianCurvatures.toVector();
+    VertexData<double> Omega = geo.vertexGaussianCurvatures;
+    Omegaii                  = Vector<double>(mesh.nInteriorVertices());
+
+    std::vector<Eigen::Triplet<double>> ET, RT, WeT;
+
+    size_t N = mesh.nInteriorVertices();
+    E        = SparseMatrix<double>(N, N);
+    R        = SparseMatrix<double>(N, N);
+    We       = SparseMatrix<double>(N, N);
+    wr       = Vector<double>(N);
+    // size_t freeCone = 994;
+    size_t freeCone = mesh.nVertices() + 7;
+
+    size_t iV = 0;
+    for (Vertex v : mesh.vertices()) {
+        if (!v.isBoundary()) {
+            ET.emplace_back(iV, iV, 1);
+            WeT.emplace_back(iV, iV, 1);
+            RT.emplace_back(iV, iV, 1);
+            Omegaii(iV) = Omega[v];
+            if (iV == freeCone) {
+                wr(iV) = 0;
+            } else {
+                wr(iV) = 1;
+            }
+
+            iV++;
+        }
+    }
+
+    if (freeCone < mesh.nVertices()) {
+        polyscope::registerPointCloud(
+            "freeVertex", std::vector<Vector3>{
+                              geo.inputVertexPositions[mesh.vertex(freeCone)]});
+    }
+
+    E.setFromTriplets(std::begin(ET), std::end(ET));
+    R.setFromTriplets(std::begin(RT), std::end(RT));
+    We.setFromTriplets(std::begin(WeT), std::end(WeT));
 }
 
 std::array<VertexData<double>, 3>
@@ -26,8 +79,8 @@ ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
 
     if (verbose) cout << "\t\tafter normalization, λ = " << lambda << endl;
 
-    Vector<double> u   = Vector<double>::Constant(mesh.nVertices(), 0);
-    Vector<double> phi = Vector<double>::Constant(mesh.nVertices(), 0);
+    Vector<double> u   = Vector<double>::Constant(mesh.nInteriorVertices(), 0);
+    Vector<double> phi = Vector<double>::Constant(mesh.nInteriorVertices(), 0);
     double gamma       = 1;
 
     if (verbose) cout << "Beginning Regularized Solves" << endl;
@@ -132,7 +185,7 @@ void ConePlacer::setVerbose(bool verb) { verbose = verb; }
 std::array<Vector<double>, 2>
 ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
                                       double lambda, double gamma) {
-    size_t n             = mesh.nVertices();
+    size_t n             = mesh.nInteriorVertices();
     double residualNorm2 = 100;
 
     size_t iter = 0;
@@ -149,7 +202,9 @@ ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
 
         residualNorm2 = step[0].squaredNorm() + step[1].squaredNorm();
         if (verbose)
-            cout << "\t\t" << iter << "\t| residual: " << residualNorm2 << endl;
+            cout << "\t\t" << iter << "\t| residual: " << residualNorm2
+                 << "\t| u norm: " << u.lpNorm<1>()
+                 << "\t| phi norm: " << phi.lpNorm<1>() << endl;
     }
 
     return {u, phi};
@@ -158,9 +213,14 @@ ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
 std::array<VertexData<double>, 3>
 ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
                                   double lambda) {
-    Vector<double> mu    = proj(phi, lambda);
-    size_t n             = mesh.nVertices();
-    double residualNorm2 = 100;
+    Vector<double> mu    = P(phi, lambda);
+    size_t n             = mesh.nInteriorVertices();
+    double residualNorm2 = residual(u, phi, mu, lambda).lpNorm<2>();
+
+    if (verbose)
+        cout << "\t initial residual: "
+             << residual(u, phi, mu, lambda).lpNorm<2>()
+             << "\t mu norm: " << mu.lpNorm<1>() << endl;
 
     size_t iter = 0;
     while (residualNorm2 > 1e-12 && iter++ < 1000) {
@@ -183,7 +243,11 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
         residualNorm2 = step[0].squaredNorm() + step[1].squaredNorm() +
                         step[2].squaredNorm();
         if (verbose)
-            cout << "\t" << iter << "\t| residual: " << residualNorm2 << endl;
+            cout << "\t" << iter << "\t| residual: " << residualNorm2
+                 << "\t u norm: " << u.lpNorm<1>()
+                 << "\t phi norm: " << phi.lpNorm<1>()
+                 << "\t mu norm: " << mu.lpNorm<1>()
+                 << "\t step2 norm: " << step[2].lpNorm<1>() << endl;
     }
 
     Vector<double> r = residual(u, phi, mu, lambda);
@@ -191,9 +255,20 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
 
     checkSubdifferential(mu, phi, lambda);
 
-    VertexData<double> uData(mesh, u);
-    VertexData<double> phiData(mesh, phi);
-    VertexData<double> muData(mesh, mu);
+    auto assignInteriorVertices = [&](const Vector<double>& vec) {
+        VertexData<double> data(mesh, 0);
+        size_t iV = 0;
+        for (Vertex v : mesh.vertices()) {
+            if (!v.isBoundary()) {
+                data[v] = vec(iV++);
+            }
+        }
+        return data;
+    };
+
+    VertexData<double> uData   = assignInteriorVertices(u);
+    VertexData<double> phiData = assignInteriorVertices(phi);
+    VertexData<double> muData  = assignInteriorVertices(mu);
 
     return {uData, phiData, muData};
 }
@@ -201,17 +276,19 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
 Vector<double> ConePlacer::regularizedResidual(const Vector<double>& u,
                                                const Vector<double>& phi,
                                                double lambda, double gamma) {
-    Vector<double> r0 = Lii * u - Omega + proj(phi, lambda) / gamma;
-    Vector<double> r1 = Lii.transpose() * phi - Mii * u;
+    Vector<double> r0 =
+        Lii * u - Omegaii + R * P(R.transpose() * phi, lambda) / gamma;
+    Vector<double> r1 = Lii.transpose() * phi - E * Mii * We * u;
     return stackVectors({r0, r1});
 }
 
 Vector<double> ConePlacer::residual(const Vector<double>& u,
                                     const Vector<double>& phi,
                                     const Vector<double>& mu, double lambda) {
-    Vector<double> r0 = Lii * u - Omega + mu;
-    Vector<double> r1 = Lii.transpose() * phi - Mii * u;
-    Vector<double> r2 = mu - proj(Vector<double>(phi + mu), lambda);
+    Vector<double> r0 = Lii * u - Omegaii + R * mu;
+    Vector<double> r1 = Lii.transpose() * phi - E * Mii * We * u;
+    Vector<double> r2 =
+        mu - P(Vector<double>(R.transpose() * phi + mu), lambda);
     return stackVectors({r0, r1, r2});
 }
 
@@ -219,14 +296,16 @@ SparseMatrix<double> ConePlacer::computeDF(const Vector<double>& u,
                                            const Vector<double>& phi,
                                            const Vector<double>& mu,
                                            double lambda) {
-    SparseMatrix<double> zeros(mesh.nVertices(), mesh.nVertices());
-    SparseMatrix<double> id(mesh.nVertices(), mesh.nVertices());
+    SparseMatrix<double> zeros(mesh.nInteriorVertices(),
+                               mesh.nInteriorVertices());
+    SparseMatrix<double> id(mesh.nInteriorVertices(), mesh.nInteriorVertices());
     id.setIdentity();
-    SparseMatrix<double> Dphimu = D(phi + mu, lambda);
+    SparseMatrix<double> Dphi   = D(R.transpose() * phi, lambda);
+    SparseMatrix<double> Dphimu = D(R.transpose() * phi + mu, lambda);
     // clang-format off
-    SparseMatrix<double> top = horizontalStack<double>({Lii, zeros, id});
-    SparseMatrix<double> mid = horizontalStack<double>({-Mii, Lii.transpose(), zeros});
-    SparseMatrix<double> bot = horizontalStack<double>({zeros, -Dphimu, id - Dphimu});
+    SparseMatrix<double> top = horizontalStack<double>({Lii,           zeros,           R});
+    SparseMatrix<double> mid = horizontalStack<double>({-E * Mii * We, Lii.transpose(), zeros});
+    SparseMatrix<double> bot = horizontalStack<double>({zeros,         -Dphimu,         id - Dphimu});
     // clang-format on
 
     return verticalStack<double>({top, mid, bot});
@@ -255,7 +334,7 @@ Vector<double> ConePlacer::normalizeMuSum(const Vector<double>& mu) {
     return targetSum / muSum(mu) * mu;
 }
 
-Vector<double> ConePlacer::proj(Vector<double> x, double lambda) {
+Vector<double> ConePlacer::P(Vector<double> x, double lambda) {
     for (size_t iV = 0; iV < (size_t)x.rows(); ++iV) {
         x(iV) = fmax(0, x(iV) - lambda) + fmin(0, x(iV) + lambda);
     }
@@ -267,13 +346,12 @@ SparseMatrix<double> ConePlacer::D(const Vector<double>& x, double lambda) {
     std::vector<Eigen::Triplet<double>> T;
 
     std::vector<double> diag = Dvec(x, lambda);
-    size_t n                 = mesh.nVertices();
 
-    for (size_t iE = 0; iE < n; ++iE) {
+    for (size_t iE = 0; iE < diag.size(); ++iE) {
         if (abs(diag[iE]) > 1e-12) T.emplace_back(iE, iE, diag[iE]);
     }
 
-    SparseMatrix<double> M(n, n);
+    SparseMatrix<double> M(diag.size(), diag.size());
     M.setFromTriplets(std::begin(T), std::end(T));
 
     return M;
@@ -282,7 +360,7 @@ SparseMatrix<double> ConePlacer::D(const Vector<double>& x, double lambda) {
 std::vector<double> ConePlacer::Dvec(const Vector<double>& x, double lambda) {
     std::vector<double> result;
     for (size_t iV = 0; iV < (size_t)x.rows(); ++iV) {
-        if (x(iV) > lambda || x(iV) < -lambda) {
+        if (abs(x(iV)) > wr(iV) * lambda) {
             result.push_back(1);
         } else {
             result.push_back(0);
@@ -292,22 +370,32 @@ std::vector<double> ConePlacer::Dvec(const Vector<double>& x, double lambda) {
 }
 
 bool ConePlacer::checkSubdifferential(const Vector<double>& mu,
-                                      const Vector<double>& phi, double lambda,
-                                      size_t trials) {
-    Vector<double> psi(mesh.nVertices());
-    for (size_t iT = 0; iT < trials; ++iT) {
-        for (size_t iV = 0; iV < mesh.nVertices(); ++iV) {
-            psi(iV) = (mu(iV) > 0) ? lambda : -lambda;
-            // psi(iV) = randomReal(-lambda, lambda);
-        }
+                                      const Vector<double>& phi,
+                                      double lambda) {
+    // Check F-R subdifferential
+    Vector<double> psi(mesh.nInteriorVertices());
+    for (size_t iV = 0; iV < mesh.nInteriorVertices(); ++iV) {
+        psi(iV) = (mu(iV) > 0) ? lambda : -lambda;
+    }
 
-        // Subdifferential condition says for all psi, mu(psi) <= mu(phi)
-        double err = mu.dot(psi) - mu.dot(phi);
+    // Subdifferential condition says for all psi, mu(psi) <= mu(phi)
+    double err = mu.dot(psi) - mu.dot(phi);
 
-        if (err > 1e-8) {
-            cerr << "Not a subdifferential after all" << endl;
-            exit(1);
-        }
+    if (err > 1e-8) {
+        cerr << "Not a subdifferential after all" << endl;
+    } else {
+        cerr << "Subdifferential okay" << endl;
+    }
+
+    // Check abstract subdifferential
+    double Rmu = lambda * mu.lpNorm<1>();
+
+    err = abs(Rmu - mu.dot(phi));
+
+    if (err > 1e-8) {
+        cerr << "Not an abstract subdifferential after all" << endl;
+    } else {
+        cerr << "Abstract subdifferential okay" << endl;
     }
 
     return true;

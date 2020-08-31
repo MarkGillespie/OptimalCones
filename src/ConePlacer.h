@@ -4,6 +4,8 @@
 #include "geometrycentral/surface/vertex_position_geometry.h"
 #include "geometrycentral/utilities/utilities.h" // RandomReal
 
+#include "polyscope/point_cloud.h"
+
 #include <deque>
 
 using namespace geometrycentral;
@@ -62,17 +64,16 @@ class ConePlacer {
     double muSum(const Vector<double>& mu);
     Vector<double> normalizeMuSum(const Vector<double>& mu);
 
-    Vector<double> proj(Vector<double> x, double lambda);
+    Vector<double> P(Vector<double> x, double lambda);
 
     bool checkSubdifferential(const Vector<double>& mu,
-                              const Vector<double>& phi, double lambda,
-                              size_t trials = 50);
+                              const Vector<double>& phi, double lambda);
 
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;
     VertexData<size_t> vIdx;
-    SparseMatrix<double> Lii, Mii;
-    Vector<double> Omega;
+    SparseMatrix<double> Lii, Mii, E, We, R;
+    Vector<double> Omegaii, wr;
 
     bool verbose = false;
 };
