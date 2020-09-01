@@ -92,7 +92,6 @@ ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
     }
 
     if (verbose) cout << "Beginning Exact Solve" << endl;
-
     return computeOptimalMeasure(u, phi, lambda);
 }
 
@@ -237,8 +236,10 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
         u += step[0];
         phi += step[1];
         mu += step[2];
+        u = computeU(mu);
 
-        mu = normalizeMuSum(mu);
+        // TODO: should I normalize mu?
+        // mu = normalizeMuSum(mu);
 
         residualNorm2 = step[0].squaredNorm() + step[1].squaredNorm() +
                         step[2].squaredNorm();
@@ -254,6 +255,17 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
     if (verbose) cout << "\t final residual: " << r.lpNorm<2>() << endl;
 
     checkSubdifferential(mu, phi, lambda);
+
+    Vector<double> uErr = Lii * u - Omegaii + R * mu;
+    if (verbose) cerr << "u err: " << uErr.norm() << endl;
+
+    Vector<double> computedU = computeU(mu);
+    if (verbose) cerr << "solved u err: " << (computedU - u).norm() << endl;
+    if (verbose)
+        cerr << "Lii * solved u err: " << (Lii * (computedU - u)).norm()
+             << endl;
+
+    checkPhiIsEnergyGradient(mu, phi, lambda);
 
     auto assignInteriorVertices = [&](const Vector<double>& vec) {
         VertexData<double> data(mesh, 0);
@@ -399,6 +411,56 @@ bool ConePlacer::checkSubdifferential(const Vector<double>& mu,
     }
 
     return true;
+}
+
+double ConePlacer::checkPhiIsEnergyGradient(const Vector<double>& mu,
+                                            const Vector<double>& phi,
+                                            double lambda, double epsilon) {
+    double worstErr = 0;
+    double L2Err    = 0;
+    double muEnergy = computeDistortionEnergy(mu, lambda);
+    for (size_t iV = 0; iV < (size_t)mu.rows(); ++iV) {
+        Vector<double> dmu = Vector<double>::Zero(mu.rows());
+        dmu(iV)            = epsilon;
+
+        double perturbedEnergy = computeDistortionEnergy(mu + dmu, lambda);
+        double finiteDifference =
+            (perturbedEnergy - muEnergy) / epsilon * Mii.coeff(iV, iV);
+
+        if (iV < 10 && verbose) {
+            cout << "finiteDifference: " << finiteDifference
+                 << "\tphi: " << phi(iV)
+                 << "\t vertex dual area is: " << Mii.coeff(iV, iV) << endl;
+        }
+
+        double err = abs(phi(iV) + finiteDifference);
+
+        worstErr = fmax(worstErr, err);
+
+        L2Err += err * err;
+    }
+
+    L2Err = sqrt(L2Err / mu.rows());
+    if (verbose)
+        cout << "worst phi err: " << worstErr << "\t l2 err: " << L2Err << endl;
+
+    return worstErr;
+}
+
+
+Vector<double> ConePlacer::computeU(const Vector<double>& mu) {
+    Vector<double> rhs = Omegaii - R * mu;
+    if (Lsolver == nullptr) {
+        Lsolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
+            new PositiveDefiniteSolver<double>(Lii));
+    }
+    return Lsolver->solve(rhs);
+}
+
+double ConePlacer::computeDistortionEnergy(const Vector<double>& mu,
+                                           double lambda) {
+    Vector<double> u = computeU(mu);
+    return 0.5 * u.transpose() * Mii * u;
 }
 
 Vector<double> stackVectors(const std::vector<Vector<double>>& vs) {

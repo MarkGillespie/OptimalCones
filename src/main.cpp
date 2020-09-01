@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
     surfaceArea = 0;
     for (Face f : mesh->faces()) surfaceArea += geometry->faceAreas[f];
     std::cout << "Surface area: " << surfaceArea << endl;
+    std::cout << "nBoundaryLoops: " << mesh->nBoundaryLoops() << endl;
 
     // Register the mesh with polyscope
     psMesh = polyscope::registerSurfaceMesh(

@@ -69,10 +69,18 @@ class ConePlacer {
     bool checkSubdifferential(const Vector<double>& mu,
                               const Vector<double>& phi, double lambda);
 
+    double checkPhiIsEnergyGradient(const Vector<double>& mu,
+                                    const Vector<double>& phi, double lambda,
+                                    double epsilon = 1e-6);
+
+    Vector<double> computeU(const Vector<double>& mu);
+    double computeDistortionEnergy(const Vector<double>& mu, double lambda);
+
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;
     VertexData<size_t> vIdx;
     SparseMatrix<double> Lii, Mii, E, We, R;
+    std::unique_ptr<PositiveDefiniteSolver<double>> Lsolver;
     Vector<double> Omegaii, wr;
 
     bool verbose = false;
