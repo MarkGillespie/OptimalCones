@@ -13,6 +13,7 @@ ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
     SparseMatrix<double> L = geo.cotanLaplacian;
     BlockDecompositionResult<double> Ldecomp =
         blockDecomposeSquare(L, isInterior);
+
     Lii = Ldecomp.AA;
 
     geo.requireVertexLumpedMassMatrix();
@@ -104,6 +105,8 @@ VertexData<double> ConePlacer::contractClusters(const VertexData<double>& x) {
         if (visited[v] || abs(x[v]) < tol) {
             visited[v] = true;
             return;
+        } else if (v.isBoundary()) {
+            contracted[v] = x[v];
         }
 
         Vertex mode       = v;
@@ -121,7 +124,7 @@ VertexData<double> ConePlacer::contractClusters(const VertexData<double>& x) {
                 clusterSum += x[v];
                 if (abs(x[v]) > abs(x[mode])) mode = v;
                 for (Vertex w : v.adjacentVertices()) {
-                    if (!visited[w]) {
+                    if (!visited[w] && !w.isBoundary()) {
                         clusterVertices.push_back(w);
                         visited[w] = true;
                     }
@@ -198,6 +201,8 @@ ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
 
         u += step[0];
         phi += step[1];
+        // u   = projectOutConstant(u);
+        // phi = projectOutConstant(phi);
 
         residualNorm2 = step[0].squaredNorm() + step[1].squaredNorm();
         if (verbose)
@@ -236,7 +241,10 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
         u += step[0];
         phi += step[1];
         mu += step[2];
-        u = computeU(mu);
+        // u   = projectOutConstant(u);
+        // phi = projectOutConstant(phi);
+        // u   = computeU(mu);
+        // phi = computePhi(u);
 
         // TODO: should I normalize mu?
         // mu = normalizeMuSum(mu);
@@ -256,15 +264,6 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
 
     checkSubdifferential(mu, phi, lambda);
 
-    Vector<double> uErr = Lii * u - Omegaii + R * mu;
-    if (verbose) cerr << "u err: " << uErr.norm() << endl;
-
-    Vector<double> computedU = computeU(mu);
-    if (verbose) cerr << "solved u err: " << (computedU - u).norm() << endl;
-    if (verbose)
-        cerr << "Lii * solved u err: " << (Lii * (computedU - u)).norm()
-             << endl;
-
     checkPhiIsEnergyGradient(mu, phi, lambda);
 
     auto assignInteriorVertices = [&](const Vector<double>& vec) {
@@ -280,7 +279,46 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
 
     VertexData<double> uData   = assignInteriorVertices(u);
     VertexData<double> phiData = assignInteriorVertices(phi);
-    VertexData<double> muData  = assignInteriorVertices(mu);
+
+    Vector<double> fullU   = uData.toVector();
+    SparseMatrix<double> L = geo.cotanLaplacian;
+    Vector<double> Omega   = geo.vertexGaussianCurvatures.toVector();
+
+    VertexData<double> muData(mesh, Omega - L * fullU);
+
+    if (verbose) {
+        Vector<double> uErr = Lii * u - Omegaii + R * mu;
+        cerr << "u err: " << uErr.norm() << endl;
+
+        Vector<double> computedU = computeU(mu);
+        cerr << "computed u residual: "
+             << (Lii * computedU - Omegaii + R * mu).norm() << endl;
+        cerr << "solved u err (compared to solution u): "
+             << (computedU - u).norm() << endl;
+        cerr << "Lii * solved u err: " << (Lii * (computedU - u)).norm()
+             << endl;
+        for (size_t iV = 0; iV < fmin(10, computedU.size()); ++iV)
+            cerr << computedU(iV) << "\t" << u(iV) << "\t"
+                 << computedU(iV) - u(iV) << endl;
+
+        Vector<double> ones = Vector<double>::Constant(uErr.rows(), 1);
+
+        cerr << "u . ones : " << u.dot(ones)
+             << "\t computedU . ones: " << computedU.dot(ones) << endl;
+
+        double netConeAngle = muData.toVector().sum();
+        cerr << "net cone angle: " << netConeAngle
+             << "\t 2 pi chi: " << 2 * M_PI * mesh.eulerCharacteristic()
+             << endl;
+        // SparseMatrix<double> DF = computeDF(u, phi, mu, lambda);
+        // Eigen::SparseQR<SparseMatrix<double>, Eigen::COLAMDOrdering<int>> lu;
+        // lu.compute(DF);
+        // cerr << "DF nullity = " << DF.rows() - lu.rank() << endl;
+        // lu.compute(Lii);
+        // cerr << "Lii nullity = " << Lii.rows() - lu.rank() << endl;
+        // cerr << "Lii * ones norm:" << (Lii * ones).norm() << endl;
+    }
+
 
     return {uData, phiData, muData};
 }
@@ -431,6 +469,8 @@ double ConePlacer::checkPhiIsEnergyGradient(const Vector<double>& mu,
             cout << "finiteDifference: " << finiteDifference
                  << "\tphi: " << phi(iV)
                  << "\t vertex dual area is: " << Mii.coeff(iV, iV) << endl;
+        } else {
+            break;
         }
 
         double err = abs(phi(iV) + finiteDifference);
@@ -447,6 +487,20 @@ double ConePlacer::checkPhiIsEnergyGradient(const Vector<double>& mu,
     return worstErr;
 }
 
+Vector<double> ConePlacer::computePhi(const Vector<double>& u) {
+    Vector<double> rhs = E * Mii * We * u;
+
+    // TODO: it should be Lii.transpose(), but Lii is symmetric, so this should
+    // be fine
+    if (Lsolver == nullptr) {
+        Lsolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
+            new PositiveDefiniteSolver<double>(Lii));
+    }
+
+    Vector<double> phi = Lsolver->solve(rhs);
+    return phi;
+    // return projectOutConstant(phi);
+}
 
 Vector<double> ConePlacer::computeU(const Vector<double>& mu) {
     Vector<double> rhs = Omegaii - R * mu;
@@ -454,7 +508,16 @@ Vector<double> ConePlacer::computeU(const Vector<double>& mu) {
         Lsolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
             new PositiveDefiniteSolver<double>(Lii));
     }
-    return Lsolver->solve(rhs);
+
+    Vector<double> u = Lsolver->solve(rhs);
+    return u;
+    // return projectOutConstant(u);
+}
+
+Vector<double> ConePlacer::projectOutConstant(const Vector<double>& vec) {
+    Vector<double> ones = Vector<double>::Constant(vec.rows(), 1);
+    ones /= ones.norm();
+    return vec - ones.dot(vec) * ones;
 }
 
 double ConePlacer::computeDistortionEnergy(const Vector<double>& mu,

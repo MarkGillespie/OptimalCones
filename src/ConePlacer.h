@@ -73,7 +73,9 @@ class ConePlacer {
                                     const Vector<double>& phi, double lambda,
                                     double epsilon = 1e-6);
 
+    Vector<double> computePhi(const Vector<double>& u);
     Vector<double> computeU(const Vector<double>& mu);
+    Vector<double> projectOutConstant(const Vector<double>& vec);
     double computeDistortionEnergy(const Vector<double>& mu, double lambda);
 
     ManifoldSurfaceMesh& mesh;
