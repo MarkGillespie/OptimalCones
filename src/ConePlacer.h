@@ -43,12 +43,12 @@ class ConePlacer {
     std::array<VertexData<double>, 3>
     computeOptimalMeasure(Vector<double> u, Vector<double> phi, double lambda);
 
+    Vector<double> residual(const Vector<double>& u, const Vector<double>& phi,
+                            const Vector<double>& mu, double lambda);
+
     Vector<double> regularizedResidual(const Vector<double>& u,
                                        const Vector<double>& phi, double lambda,
                                        double gamma);
-
-    Vector<double> residual(const Vector<double>& u, const Vector<double>& phi,
-                            const Vector<double>& mu, double lambda);
 
     SparseMatrix<double> computeDF(const Vector<double>& u,
                                    const Vector<double>& phi,
@@ -77,13 +77,15 @@ class ConePlacer {
     Vector<double> computeU(const Vector<double>& mu);
     Vector<double> projectOutConstant(const Vector<double>& vec);
     double computeDistortionEnergy(const Vector<double>& mu, double lambda);
+    double Lagrangian(const Vector<double>& mu, const Vector<double>& u,
+                      const Vector<double>& phi);
 
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;
     VertexData<size_t> vIdx;
-    SparseMatrix<double> Lii, Mii, E, We, R;
+    SparseMatrix<double> Lii, Lib, Mii;
     std::unique_ptr<PositiveDefiniteSolver<double>> Lsolver;
-    Vector<double> Omegaii, wr;
+    Vector<double> Omegaii;
 
     bool verbose = false;
 };

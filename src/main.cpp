@@ -87,9 +87,9 @@ int main(int argc, char** argv) {
     for (Face f : mesh->faces()) surfaceArea += geometry->faceAreas[f];
     double r = sqrt(surfaceArea);
 
-    for (Vertex v : mesh->vertices()) {
-        geometry->inputVertexPositions[v] /= r;
-    }
+    // for (Vertex v : mesh->vertices()) {
+    //     geometry->inputVertexPositions[v] /= r;
+    // }
 
     geometry->refreshQuantities();
     surfaceArea = 0;
