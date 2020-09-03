@@ -28,12 +28,15 @@ void myCallback() {
     static float lambda = 0.5;
     ImGui::SliderFloat("lambda", &lambda, 0.f, 1.f, "lambda=%.3f");
 
+    static int iterations = 12;
+    ImGui::SliderInt("iterations", &iterations, 1, 20, "iter=%.3f");
+
     if (ImGui::Button("Place Cones")) {
         ConePlacer pl(*mesh, *geometry);
         pl.setVerbose(true);
 
         VertexData<double> u, phi, mu;
-        std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, 12);
+        std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, iterations);
 
         VertexData<double> muSparse       = pl.contractClusters(mu);
         VertexData<double> muSparsePruned = pl.pruneSmallCones(muSparse, 0.05);
@@ -87,9 +90,9 @@ int main(int argc, char** argv) {
     for (Face f : mesh->faces()) surfaceArea += geometry->faceAreas[f];
     double r = sqrt(surfaceArea);
 
-    // for (Vertex v : mesh->vertices()) {
-    //     geometry->inputVertexPositions[v] /= r;
-    // }
+    for (Vertex v : mesh->vertices()) {
+        geometry->inputVertexPositions[v] /= r;
+    }
 
     geometry->refreshQuantities();
     surfaceArea = 0;
