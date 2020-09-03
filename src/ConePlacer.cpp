@@ -206,6 +206,14 @@ ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
         // exit(1);
     }
 
+
+    auto psMesh = polyscope::getSurfaceMesh("mesh");
+    psMesh->addVertexScalarQuantity("u", extendInteriorByZero(u));
+    psMesh->addVertexScalarQuantity("phi", extendInteriorByZero(phi));
+    Vector<double> mu = P(phi, lambda) / gamma;
+    psMesh->addVertexScalarQuantity("mu", extendInteriorByZero(mu));
+    polyscope::show();
+
     return {u, phi};
 }
 
@@ -595,6 +603,18 @@ double ConePlacer::Lagrangian(const Vector<double>& mu, const Vector<double>& u,
     // L = u^T M u - φ^T L u + φ^T Ω - φ^T μ
     return 0.5 * u.dot(Mii * u) - phi.dot(Lii * u) + phi.dot(Omegaii) -
            phi.dot(mu);
+}
+
+Vector<double>
+ConePlacer::extendInteriorByZero(const Vector<double>& interior) {
+    Vector<double> result(mesh.nVertices());
+    size_t iI = 0;
+    for (Vertex v : mesh.vertices()) {
+        if (!v.isBoundary()) {
+            result(vIdx[v]) = interior(iI++);
+        }
+    }
+    return result;
 }
 
 Vector<double> stackVectors(const std::vector<Vector<double>>& vs) {

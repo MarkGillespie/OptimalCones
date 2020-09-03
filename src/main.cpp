@@ -99,8 +99,7 @@ int main(int argc, char** argv) {
 
     // Register the mesh with polyscope
     psMesh = polyscope::registerSurfaceMesh(
-        polyscope::guessNiceNameFromPath(filename),
-        geometry->inputVertexPositions, mesh->getFaceVertexList(),
+        "mesh", geometry->inputVertexPositions, mesh->getFaceVertexList(),
         polyscopePermutations(*mesh));
 
     // Give control to the polyscope gui

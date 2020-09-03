@@ -5,6 +5,7 @@
 #include "geometrycentral/utilities/utilities.h" // RandomReal
 
 #include "polyscope/point_cloud.h"
+#include "polyscope/surface_mesh.h"
 
 #include <deque>
 
@@ -79,6 +80,7 @@ class ConePlacer {
     double computeDistortionEnergy(const Vector<double>& mu, double lambda);
     double Lagrangian(const Vector<double>& mu, const Vector<double>& u,
                       const Vector<double>& phi);
+    Vector<double> extendInteriorByZero(const Vector<double>& interior);
 
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;
