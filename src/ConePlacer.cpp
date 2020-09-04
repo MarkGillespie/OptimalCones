@@ -4,10 +4,13 @@ ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
     : mesh(mesh_), geo(geo_) {
     vIdx = mesh.getVertexIndices();
 
-    Vector<bool> isInterior(mesh.nVertices());
+    isInterior = Vector<bool>(mesh.nVertices());
     for (Vertex v : mesh.vertices()) {
         isInterior(vIdx[v]) = !v.isBoundary();
     }
+    nVertices = mesh.nVertices();
+    nInterior = mesh.nInteriorVertices();
+    nBoundary = nVertices - nInterior;
 
     geo.requireCotanLaplacian();
     SparseMatrix<double> L = geo.cotanLaplacian;
@@ -115,44 +118,43 @@ VertexData<double> ConePlacer::contractClusters(const VertexData<double>& x) {
     return contracted;
 }
 
-VertexData<double> ConePlacer::pruneSmallCones(const VertexData<double>& mu,
-                                               double threshold) {
-    return pruneSmallCones(mu, threshold, threshold);
+VertexData<double> ConePlacer::computeU(const VertexData<double>& mu) {
+    Vector<double> muInterior = getInterior(mu.toVector());
+
+    if (Liisolver == nullptr) {
+        Liisolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
+            new PositiveDefiniteSolver<double>(Lii));
+    }
+
+    Vector<double> uInterior = Liisolver->solve(Omegaii - muInterior);
+
+    return VertexData<double>(mesh, extendInteriorByZero(uInterior));
 }
 
-VertexData<double> ConePlacer::pruneSmallCones(VertexData<double> mu,
-                                               double positiveThreshold,
-                                               double negativeThreshold) {
-    double maxCone = 0;
-    double minCone = 0;
-    for (Vertex v : mesh.vertices()) {
-        maxCone = fmax(maxCone, mu[v]);
-        minCone = fmin(minCone, mu[v]);
+VertexData<double> ConePlacer::computePhi(const VertexData<double>& u) {
+    Vector<double> uInterior = getInterior(u.toVector());
+
+    if (Liisolver == nullptr) {
+        Liisolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
+            new PositiveDefiniteSolver<double>(Lii));
     }
 
-    double targetConeSum = 2 * M_PI * mesh.eulerCharacteristic();
-    double coneSum       = 0;
-    for (Vertex v : mesh.vertices()) {
-        if (mu[v] > 0) {
-            if (mu[v] < positiveThreshold * maxCone) {
-                mu[v] = 0;
-            } else {
-                coneSum += mu[v];
-            }
-        } else if (mu[v] < 0) {
-            if (mu[v] > negativeThreshold * minCone) {
-                mu[v] = 0;
-            } else {
-                coneSum += mu[v];
-            }
-        }
-    }
+    Vector<double> phiInterior = Liisolver->solve(Mii * uInterior);
 
-    for (Vertex v : mesh.vertices()) {
-        mu[v] *= targetConeSum / coneSum;
-    }
+    return VertexData<double>(mesh, extendInteriorByZero(phiInterior));
+}
 
-    return mu;
+double ConePlacer::projErr(const VertexData<double>& mu,
+                           const VertexData<double>& phi) {
+    Vector<double> muVec  = getInterior(mu.toVector());
+    Vector<double> phiVec = getInterior(phi.toVector());
+    return 0;
+}
+
+double ConePlacer::L2Energy(const VertexData<double>& u) {
+    Vector<double> uInterior = getInterior(u.toVector());
+
+    return 0.5 * uInterior.dot(Mii * uInterior);
 }
 
 void ConePlacer::setVerbose(bool verb) { verbose = verb; }
@@ -207,12 +209,12 @@ ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
     }
 
 
-    auto psMesh = polyscope::getSurfaceMesh("mesh");
-    psMesh->addVertexScalarQuantity("u", extendInteriorByZero(u));
-    psMesh->addVertexScalarQuantity("phi", extendInteriorByZero(phi));
-    Vector<double> mu = P(phi, lambda) / gamma;
-    psMesh->addVertexScalarQuantity("mu", extendInteriorByZero(mu));
-    polyscope::show();
+    // auto psMesh = polyscope::getSurfaceMesh("mesh");
+    // psMesh->addVertexScalarQuantity("u", extendInteriorByZero(u));
+    // psMesh->addVertexScalarQuantity("phi", extendInteriorByZero(phi));
+    // Vector<double> mu = P(phi, lambda) / gamma;
+    // psMesh->addVertexScalarQuantity("mu", extendInteriorByZero(mu));
+    // polyscope::show();
 
     return {u, phi};
 }
@@ -319,6 +321,8 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
         cerr << "net cone angle: " << netConeAngle
              << "\t 2 pi chi: " << 2 * M_PI * mesh.eulerCharacteristic()
              << endl;
+        cerr << "total (interior) cone angle: " << mu.lpNorm<1>()
+             << "\t L2 energy: " << 0.5 * u.dot(Mii * u) << endl;
         // SparseMatrix<double> DF = computeDF(u, phi, mu, lambda);
         // Eigen::SparseQR<SparseMatrix<double>, Eigen::COLAMDOrdering<int>> lu;
         // lu.compute(DF);
@@ -539,12 +543,12 @@ Vector<double> ConePlacer::computePhi(const Vector<double>& u) {
 
     // TODO: it should be Lii.transpose(), but Lii is symmetric, so this
     // should be fine
-    if (Lsolver == nullptr) {
-        Lsolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
+    if (Liisolver == nullptr) {
+        Liisolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
             new PositiveDefiniteSolver<double>(Lii));
     }
 
-    Vector<double> phi      = Lsolver->solve(rhs);
+    Vector<double> phi      = Liisolver->solve(rhs);
     Vector<double> residual = Lii * phi - rhs;
     if (residual.norm() / phi.norm() > 1e-8) {
         cerr << "phi solve failed with err " << residual.norm()
@@ -558,12 +562,12 @@ Vector<double> ConePlacer::computePhi(const Vector<double>& u) {
 
 Vector<double> ConePlacer::computeU(const Vector<double>& mu) {
     Vector<double> rhs = Omegaii - mu;
-    if (Lsolver == nullptr) {
-        Lsolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
+    if (Liisolver == nullptr) {
+        Liisolver = std::unique_ptr<PositiveDefiniteSolver<double>>(
             new PositiveDefiniteSolver<double>(Lii));
     }
 
-    Vector<double> u = Lsolver->solve(rhs);
+    Vector<double> u = Liisolver->solve(rhs);
     // u                = projectOutConstant(u);
 
     Vector<double> residual = Lii * u - rhs;
@@ -605,16 +609,57 @@ double ConePlacer::Lagrangian(const Vector<double>& mu, const Vector<double>& u,
            phi.dot(mu);
 }
 
-Vector<double>
-ConePlacer::extendInteriorByZero(const Vector<double>& interior) {
-    Vector<double> result(mesh.nVertices());
+std::array<Vector<double>, 2>
+ConePlacer::splitInteriorBoundary(const Vector<double>& vec) {
+    Vector<double> interior(nInterior);
+    Vector<double> boundary(nBoundary);
+
     size_t iI = 0;
-    for (Vertex v : mesh.vertices()) {
-        if (!v.isBoundary()) {
-            result(vIdx[v]) = interior(iI++);
+    size_t iB = 0;
+    for (size_t iV = 0; iV < nVertices; ++iV) {
+        if (isInterior(iV)) {
+            interior(iI++) = vec(iV);
+        } else {
+            boundary(iB++) = vec(iV);
         }
     }
-    return result;
+    return {interior, boundary};
+}
+
+
+Vector<double>
+ConePlacer::combineInteriorBoundary(const Vector<double>& interior,
+                                    const Vector<double>& boundary) {
+    Vector<double> combined(nVertices);
+    size_t iI = 0;
+    size_t iB = 0;
+
+    for (size_t iV = 0; iV < nVertices; ++iV) {
+        if (isInterior(iV)) {
+            combined(iV) = interior(iI++);
+        } else {
+            combined(iV) = boundary(iB++);
+        }
+    }
+    return combined;
+}
+
+Vector<double>
+ConePlacer::extendBoundaryByZero(const Vector<double>& boundary) {
+    return combineInteriorBoundary(Vector<double>::Zero(nInterior), boundary);
+}
+
+Vector<double>
+ConePlacer::extendInteriorByZero(const Vector<double>& interior) {
+    return combineInteriorBoundary(interior, Vector<double>::Zero(nBoundary));
+}
+
+Vector<double> ConePlacer::getInterior(const Vector<double>& vec) {
+    return splitInteriorBoundary(vec)[0];
+}
+
+Vector<double> ConePlacer::getBoundary(const Vector<double>& vec) {
+    return splitInteriorBoundary(vec)[1];
 }
 
 Vector<double> stackVectors(const std::vector<Vector<double>>& vs) {

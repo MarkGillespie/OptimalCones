@@ -17,9 +17,41 @@ using namespace geometrycentral::surface;
 // == Geometry-central data
 std::unique_ptr<ManifoldSurfaceMesh> mesh;
 std::unique_ptr<VertexPositionGeometry> geometry;
+VertexData<double> niceCones;
 
 // Polyscope visualization handle, to quickly add data to the surface
 polyscope::SurfaceMesh* psMesh;
+
+void plotNiceSolution() {
+
+    if (niceCones.getMesh() != nullptr) {
+
+        ConePlacer pl(*mesh, *geometry);
+        pl.setVerbose(true);
+        VertexData<double> niceU   = pl.computeU(niceCones);
+        VertexData<double> nicePhi = pl.computePhi(niceU);
+
+        psMesh->addVertexScalarQuantity("Nice mu", niceCones);
+        psMesh->addVertexScalarQuantity("Nice u", niceU);
+        psMesh->addVertexScalarQuantity("Nice phi", nicePhi);
+
+        cerr << "total nice (interior) cone angle: "
+             << niceCones.toVector().lpNorm<1>()
+             << "\t L2 energy: " << pl.L2Energy(niceU) << endl;
+        std::vector<double> lambdaEstimates;
+        for (Vertex v : mesh->vertices()) {
+            if (abs(niceCones[v]) > 1e-8) {
+                lambdaEstimates.push_back(
+                    std::copysign(nicePhi[v], niceCones[v]));
+            }
+        }
+
+        cerr << "Lambda estimates: " << endl;
+        for (double lambda : lambdaEstimates) {
+            cerr << lambda << endl;
+        }
+    }
+}
 
 // A user-defined callback, for creating control panels (etc)
 // Use ImGUI commands to build whatever you want here, see
@@ -28,22 +60,37 @@ void myCallback() {
     static float lambda = 0.5;
     ImGui::SliderFloat("lambda", &lambda, 0.f, 1.f, "lambda=%.3f");
 
+    static int iterations = 12;
+    ImGui::SliderInt("iterations", &iterations, 1, 20, "iter=%.3f");
+
     if (ImGui::Button("Place Cones")) {
         ConePlacer pl(*mesh, *geometry);
         pl.setVerbose(true);
 
         VertexData<double> u, phi, mu;
-        std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda, 12);
+        std::tie(u, phi, mu) =
+            pl.computeOptimalMeasure(lambda / 100, iterations);
 
-        VertexData<double> muSparse       = pl.contractClusters(mu);
-        VertexData<double> muSparsePruned = pl.pruneSmallCones(muSparse, 0.05);
+        VertexData<double> muSparse = pl.contractClusters(mu);
 
         psMesh->addVertexScalarQuantity("u", u);
         psMesh->addVertexScalarQuantity("phi", phi);
         psMesh->addVertexScalarQuantity("mu", mu);
         psMesh->addVertexScalarQuantity("muSparse", muSparse);
-        psMesh->addVertexScalarQuantity("muSparsePruned", muSparsePruned);
     }
+}
+
+std::map<size_t, double> readCones(std::string filename) {
+    std::ifstream coneFile(filename);
+    size_t iV;
+    double angle;
+    std::map<size_t, double> coneAngles;
+
+    while (coneFile >> iV >> angle) {
+        coneAngles[iV] = angle;
+    }
+
+    return coneAngles;
 }
 
 int main(int argc, char** argv) {
@@ -52,6 +99,8 @@ int main(int argc, char** argv) {
     args::ArgumentParser parser("Geometry program");
     args::Positional<std::string> inputFilename(parser, "mesh",
                                                 "Mesh to be processed.");
+    args::Positional<std::string> coneFilename(
+        parser, "cones", "List of cones and cone angles.");
 
     // Parse args
     try {
@@ -87,9 +136,9 @@ int main(int argc, char** argv) {
     for (Face f : mesh->faces()) surfaceArea += geometry->faceAreas[f];
     double r = sqrt(surfaceArea);
 
-    // for (Vertex v : mesh->vertices()) {
-    //     geometry->inputVertexPositions[v] /= r;
-    // }
+    for (Vertex v : mesh->vertices()) {
+        geometry->inputVertexPositions[v] /= r;
+    }
 
     geometry->refreshQuantities();
     surfaceArea = 0;
@@ -101,6 +150,15 @@ int main(int argc, char** argv) {
     psMesh = polyscope::registerSurfaceMesh(
         "mesh", geometry->inputVertexPositions, mesh->getFaceVertexList(),
         polyscopePermutations(*mesh));
+
+    if (coneFilename) {
+        std::map<size_t, double> cones = readCones(args::get(coneFilename));
+        niceCones                      = VertexData<double>(*mesh, 0);
+        for (auto const& cone : cones) {
+            niceCones[mesh->vertex(cone.first)] = cone.second;
+        }
+        plotNiceSolution();
+    }
 
     // Give control to the polyscope gui
     polyscope::show();

@@ -26,12 +26,11 @@ class ConePlacer {
     computeOptimalMeasure(double lambda = 1, size_t regularizedSteps = 4);
 
     VertexData<double> contractClusters(const VertexData<double>& x);
-    VertexData<double> pruneSmallCones(const VertexData<double>& mu,
-                                       double threshold = 0.5);
 
-    VertexData<double> pruneSmallCones(VertexData<double> mu,
-                                       double positiveThreshold,
-                                       double negativeThreshold);
+    VertexData<double> computeU(const VertexData<double>& mu);
+    VertexData<double> computePhi(const VertexData<double>& u);
+    double projErr(const VertexData<double>& mu, const VertexData<double>& phi);
+    double L2Energy(const VertexData<double>& u);
 
     void setVerbose(bool verb);
 
@@ -80,14 +79,26 @@ class ConePlacer {
     double computeDistortionEnergy(const Vector<double>& mu, double lambda);
     double Lagrangian(const Vector<double>& mu, const Vector<double>& u,
                       const Vector<double>& phi);
+
+    std::array<Vector<double>, 2>
+    splitInteriorBoundary(const Vector<double>& vec);
+    Vector<double> combineInteriorBoundary(const Vector<double>& interior,
+                                           const Vector<double>& boundary);
+    Vector<double> extendBoundaryByZero(const Vector<double>& boundary);
     Vector<double> extendInteriorByZero(const Vector<double>& interior);
+    Vector<double> extendInteriorByZero(const std::vector<double>& interior);
+    Vector<double> getInterior(const Vector<double>& vec);
+    Vector<double> getBoundary(const Vector<double>& vec);
 
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;
     VertexData<size_t> vIdx;
     SparseMatrix<double> Lii, Lib, Mii;
-    std::unique_ptr<PositiveDefiniteSolver<double>> Lsolver;
+    std::unique_ptr<PositiveDefiniteSolver<double>> Liisolver;
     Vector<double> Omegaii;
+
+    Vector<bool> isInterior;
+    size_t nInterior, nBoundary, nVertices;
 
     bool verbose = false;
 };
