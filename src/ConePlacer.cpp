@@ -14,6 +14,9 @@ ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
 
     geo.requireCotanLaplacian();
     SparseMatrix<double> L = geo.cotanLaplacian;
+    // if (nBoundary == 0)
+    L += 1e-12 * speye(nVertices);
+
     BlockDecompositionResult<double> Ldecomp =
         blockDecomposeSquare(L, isInterior);
 
@@ -25,10 +28,6 @@ ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
     BlockDecompositionResult<double> Mdecomp =
         blockDecomposeSquare(M, isInterior);
     Mii = Mdecomp.AA;
-
-    std::cout << "L rows: " << L.rows() << "\tLii rows: " << Lii.rows()
-              << "\t M rows: " << Mii.rows()
-              << "\tnInteriorVertices: " << mesh.nInteriorVertices() << endl;
 
     geo.requireVertexGaussianCurvatures();
     VertexData<double> Omega = geo.vertexGaussianCurvatures;
@@ -72,43 +71,82 @@ ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
     return computeOptimalMeasure(u, phi, lambda);
 }
 
-VertexData<double> ConePlacer::contractClusters(const VertexData<double>& x) {
+VertexData<double> ConePlacer::contractClusters(VertexData<double>& mu,
+                                                bool fancy) {
+    if (fancy) {
+        // Diffuse mu slightly to smooth it out
+        geo.requireMeshLengthScale();
+        // double dt = 1e-8;
+        double dt = 1e-6 * geo.meshLengthScale;
+
+        geo.requireCotanLaplacian();
+        geo.requireVertexLumpedMassMatrix();
+        const SparseMatrix<double>& L = geo.cotanLaplacian;
+        const SparseMatrix<double>& M = geo.vertexLumpedMassMatrix;
+
+        geo.requireVertexDualAreas();
+        Vector<double> MinvMu = mu.toVector();
+        for (Vertex v : mesh.vertices())
+            MinvMu(vIdx[v]) /= geo.vertexDualAreas[v];
+
+        SparseMatrix<double> diffuse = M + dt * L;
+
+        Vector<double> interiorMu = mu.toVector();
+        for (Vertex v : mesh.vertices()) {
+            if (v.isBoundary()) interiorMu(vIdx[v]) = 0;
+        }
+
+        Vector<double> fuzzyMu = M * solvePositiveDefinite(diffuse, interiorMu);
+        for (Vertex v : mesh.vertices()) {
+            if (v.isBoundary()) fuzzyMu(vIdx[v]) = mu[v];
+        }
+
+        mu = VertexData<double>(mesh, fuzzyMu);
+
+        polyscope::getSurfaceMesh("mesh")->addVertexScalarQuantity("fuzzy mu",
+                                                                   mu);
+    }
+
     double tol = 1e-12;
     VertexData<bool> visited(mesh, false);
     VertexData<double> contracted(mesh, 0);
 
     auto contractCluster = [&](Vertex v) {
-        if (visited[v] || abs(x[v]) < tol) {
+        if (visited[v] || abs(mu[v]) < tol) {
             visited[v] = true;
             return;
         } else if (v.isBoundary()) {
-            contracted[v] = x[v];
+            contracted[v] = mu[v];
         }
 
-        Vertex mode       = v;
-        double clusterSum = 0;
-
-        std::deque<Vertex> clusterVertices;
-        clusterVertices.push_back(v);
+        std::vector<Vertex> cluster;
+        std::deque<Vertex> toVisit;
+        toVisit.push_back(v);
         visited[v] = true;
 
-        while (!clusterVertices.empty()) {
-            Vertex v = clusterVertices.front();
-            clusterVertices.pop_front();
+        while (!toVisit.empty()) {
+            Vertex v = toVisit.front();
+            toVisit.pop_front();
+            cluster.push_back(v);
 
-            if (abs(x[v]) >= tol) {
-                clusterSum += x[v];
-                if (abs(x[v]) > abs(x[mode])) mode = v;
+            if (abs(mu[v]) >= tol) {
                 for (Vertex w : v.adjacentVertices()) {
                     if (!visited[w] && !w.isBoundary()) {
-                        clusterVertices.push_back(w);
+                        toVisit.push_back(w);
                         visited[w] = true;
                     }
                 }
             }
         }
 
-        contracted[mode] = clusterSum;
+        std::vector<Vertex> contractedVertices;
+        std::vector<double> contractedWeights;
+
+        std::tie(contractedVertices, contractedWeights) =
+            approximateCluster(mu, cluster);
+
+        for (size_t iV = 0; iV < contractedVertices.size(); ++iV)
+            contracted[contractedVertices[iV]] = contractedWeights[iV];
     };
 
     for (Vertex v : mesh.vertices()) {
@@ -662,6 +700,20 @@ Vector<double> ConePlacer::getBoundary(const Vector<double>& vec) {
     return splitInteriorBoundary(vec)[1];
 }
 
+std::pair<std::vector<Vertex>, std::vector<double>>
+ConePlacer::approximateCluster(const VertexData<double>& mu,
+                               const std::vector<Vertex>& cluster) {
+    Vertex mode       = cluster[0];
+    double clusterSum = 0;
+
+    for (Vertex v : cluster) {
+        clusterSum += mu[v];
+        if (abs(mu[v]) > abs(mu[mode])) mode = v;
+    }
+
+    return {{mode}, {clusterSum}};
+}
+
 Vector<double> stackVectors(const std::vector<Vector<double>>& vs) {
     size_t n = 0;
     for (const Vector<double>& v : vs) n += v.rows();
@@ -689,4 +741,236 @@ std::vector<Vector<double>> unstackVectors(const Vector<double>& bigV,
         unstack.push_back(v);
     }
     return unstack;
+}
+
+SparseMatrix<double> speye(size_t n) {
+    SparseMatrix<double> eye(n, n);
+    eye.setIdentity();
+    return eye;
+}
+
+GreedyPlacer::GreedyPlacer(ManifoldSurfaceMesh& mesh_,
+                           VertexPositionGeometry& geo_)
+    : mesh(mesh_), geo(geo_) {
+
+    VertexData<size_t> vIdx = mesh.getVertexIndices();
+    Vector<bool> isInterior(mesh.nVertices());
+    for (Vertex v : mesh.vertices()) {
+        isInterior(vIdx[v]) = !v.isBoundary();
+    }
+
+    nVertices = mesh.nVertices();
+    nInterior = mesh.nInteriorVertices();
+    nBoundary = nVertices - nInterior;
+
+    geo.requireCotanLaplacian();
+    SparseMatrix<double> L = geo.cotanLaplacian;
+    L += 1e-12 * speye(nVertices);
+
+    BlockDecompositionResult<double> Ldecomp =
+        blockDecomposeSquare(L, isInterior);
+
+    Lii = Ldecomp.AA;
+
+    geo.requireVertexLumpedMassMatrix();
+    SparseMatrix<double> M = geo.vertexLumpedMassMatrix;
+    BlockDecompositionResult<double> Mdecomp =
+        blockDecomposeSquare(M, isInterior);
+    Mii = Mdecomp.AA;
+
+    geo.requireVertexGaussianCurvatures();
+    VertexData<double> Omega = geo.vertexGaussianCurvatures;
+    Omegaii                  = Vector<double>(mesh.nInteriorVertices());
+
+    std::vector<Eigen::Triplet<double>> ET, RT, WeT;
+
+    size_t iV = 0;
+    for (Vertex v : mesh.vertices()) {
+        if (!v.isBoundary()) {
+            Omegaii(iV++) = Omega[v];
+        }
+    }
+}
+
+std::vector<double>
+GreedyPlacer::computeTargetAngles(std::vector<Vertex> cones) {
+
+    std::vector<double> coneAngles;
+
+    if (cones.empty()) {
+        return coneAngles;
+    }
+
+    size_t nCones = cones.size();
+
+    VertexData<size_t> interiorIndex(mesh, 0);
+    size_t iV = 0;
+    for (Vertex v : mesh.vertices()) {
+        if (!v.isBoundary()) {
+            interiorIndex[v] = iV++;
+        }
+    }
+
+    // initialize cone angles
+    for (Vertex v : cones) coneAngles.push_back(Omegaii(interiorIndex[v]));
+
+    // extract submatrices
+    if (nCones < nInterior) {
+
+
+        Vector<bool> isInteriorFlat = Vector<bool>::Constant(nInterior, true);
+        for (Vertex v : cones) isInteriorFlat(interiorIndex[v]) = false;
+
+        Vector<size_t> coneIndex(nInterior);
+        Vector<size_t> flatIndex(nInterior);
+        Vector<double> omegaFlat(nInterior - nCones);
+
+        size_t iC = 0;
+        size_t iF = 0;
+        for (size_t iV = 0; iV < nInterior; ++iV) {
+            if (isInteriorFlat(iV)) {
+                omegaFlat(iF) = Omegaii(iV);
+                flatIndex(iV) = iF++;
+            } else {
+                coneIndex(iV) = iC++;
+            }
+        }
+
+        BlockDecompositionResult<double> Liidecomp =
+            blockDecomposeSquare(Lii, isInteriorFlat);
+
+        SparseMatrix<double> Lff = Liidecomp.AA;
+        SparseMatrix<double> Lfc = Liidecomp.AB;
+
+
+        // compute target curvatures
+        for (size_t iC = 0; iC < nCones; ++iC) {
+            Vector<double> delta = Vector<double>::Zero(nCones);
+            delta(iC)            = 1;
+            Vector<double> rhs   = -Lfc * delta;
+
+            Vector<double> Gn = solvePositiveDefinite(Lff, rhs);
+
+            // Cs = Ks + Gn^T Kn
+            coneAngles[iC] += Gn.dot(omegaFlat);
+        }
+    }
+
+    return coneAngles;
+}
+
+VertexData<double>
+GreedyPlacer::computeInitialScaleFactors(VertexData<double> vertexCurvatures) {
+    geo.requireCotanLaplacian();
+
+    double totalCurvature = 2 * M_PI * mesh.eulerCharacteristic();
+    double avgCurvature   = totalCurvature / (double)mesh.nVertices();
+
+    Vector<double> weightedCurvature = -vertexCurvatures.toVector();
+    Vector<double> constantCurvature =
+        Vector<double>::Constant(mesh.nVertices(), avgCurvature);
+
+    Vector<double> curvatureDifference = weightedCurvature - constantCurvature;
+
+    Vector<double> result =
+        solvePositiveDefinite(geo.cotanLaplacian, curvatureDifference);
+
+    vertexCurvatures.fromVector(result);
+    return vertexCurvatures;
+}
+
+VertexData<double>
+GreedyPlacer::computeScaleFactors(VertexData<double> vertexCurvatures,
+                                  const std::vector<Vertex> cones, int vSkip) {
+    geo.requireCotanLaplacian();
+
+    // interior vertices are the ones that aren't cones
+    VertexData<size_t> vIdx = mesh.getVertexIndices();
+    Vector<bool> isInterior = Vector<bool>::Constant(mesh.nVertices(), true);
+
+    size_t nCones = 0;
+    for (size_t iV = 0; iV < cones.size(); ++iV) {
+        if ((int)iV != vSkip) {
+            isInterior[vIdx[cones[iV]]] = false;
+            nCones++;
+        }
+    }
+    // If the mesh has boundary, make every boundary vertex a cone
+    for (BoundaryLoop b : mesh.boundaryLoops()) {
+        for (Vertex v : b.adjacentVertices()) {
+            isInterior[vIdx[v]] = false;
+            nCones++;
+        }
+    }
+
+    BlockDecompositionResult<double> laplacianBlocks =
+        blockDecomposeSquare(geo.cotanLaplacian, isInterior, true);
+
+    Vector<double> weightedCurvature = -vertexCurvatures.toVector();
+
+    Vector<double> coneCurvature, interiorCurvature;
+    decomposeVector(laplacianBlocks, weightedCurvature, interiorCurvature,
+                    coneCurvature);
+
+    Vector<double> interiorResult =
+        solvePositiveDefinite(laplacianBlocks.AA, interiorCurvature);
+    Vector<double> zero = Eigen::VectorXd::Zero(nCones);
+    Vector<double> totalResult =
+        reassembleVector(laplacianBlocks, interiorResult, zero);
+
+    vertexCurvatures.fromVector(totalResult);
+    return vertexCurvatures;
+}
+
+VertexData<double> GreedyPlacer::niceCones(size_t nCones,
+                                           size_t gaussSeidelIterations) {
+    // Gaussian curvature at interior vertices, geodesic curvature at boundary
+    // vertices
+    VertexData<double> curvature(mesh);
+    geo.requireVertexAngleSums();
+    for (Vertex v : mesh.vertices()) {
+        if (v.isBoundary()) {
+            curvature[v] = PI - geo.vertexAngleSums[v];
+        } else {
+            curvature[v] = 2 * PI - geo.vertexAngleSums[v];
+        }
+    }
+
+    // Place first cone by approximately uniformizing to a constant curvature
+    // metric and picking the vertex with worst scale factor (We would flatten,
+    // except you can't necessarily flatten with one cone)
+    VertexData<double> scaleFactors = computeInitialScaleFactors(curvature);
+    size_t worstVertex =
+        argmax(scaleFactors, [](double x) { return std::abs(x); });
+    std::vector<Vertex> cones{mesh.vertex(worstVertex)};
+
+    // Place remaining cones by approximately flattening and picking the vertex
+    // with worst scale factor
+    for (size_t iCone = 1; iCone < nCones; ++iCone) {
+        VertexData<double> scaleFactors = computeScaleFactors(curvature, cones);
+        size_t worstVertex =
+            argmax(scaleFactors, [](double x) { return std::abs(x); });
+        cones.push_back(mesh.vertex(worstVertex));
+    }
+
+    // Place remaining cones by approximately flattening and picking the vertex
+    // with worst scale factor
+    for (size_t iGS = 0; iGS < gaussSeidelIterations; ++iGS) {
+        for (size_t iCone = 0; iCone < nCones; ++iCone) {
+            VertexData<double> scaleFactors =
+                computeScaleFactors(curvature, cones, iCone);
+            size_t worstVertex =
+                argmax(scaleFactors, [](double x) { return std::abs(x); });
+            cones[iCone] = mesh.vertex(worstVertex);
+        }
+    }
+
+    std::vector<double> coneAngles = computeTargetAngles(cones);
+
+    VertexData<double> mu(mesh, 0);
+    for (size_t iC = 0; iC < cones.size(); ++iC) {
+        mu[cones[iC]] = coneAngles[iC];
+    }
+
+    return mu;
 }

@@ -22,34 +22,50 @@ VertexData<double> niceCones;
 // Polyscope visualization handle, to quickly add data to the surface
 polyscope::SurfaceMesh* psMesh;
 
-void plotNiceSolution() {
+void plotSolution(const VertexData<double>& mu, std::string name,
+                  bool estimateLambda = false, bool skipBoundary = false) {
+
+    std::vector<Vector3> cones;
+    std::vector<double> angles;
+    ConePlacer pl(*mesh, *geometry);
+    pl.setVerbose(true);
+    VertexData<double> u   = pl.computeU(mu);
+    VertexData<double> phi = pl.computePhi(u);
+
+    psMesh->addVertexScalarQuantity(name + " mu", mu);
+    psMesh->addVertexScalarQuantity(name + " u", u);
+    psMesh->addVertexScalarQuantity(name + " phi", phi);
+
+    cerr << "total " << name << " (interior) cone angle: "
+         << pl.getInterior(mu.toVector()).lpNorm<1>()
+         << "\t L2 energy: " << pl.L2Energy(u) << endl;
+    if (estimateLambda) cerr << "Lambda estimates: " << endl;
+    geometry->requireVertexDualAreas();
+    for (Vertex v : mesh->vertices()) {
+        if (abs(mu[v]) > 1e-8 && (!skipBoundary || !v.isBoundary())) {
+            cones.push_back(geometry->inputVertexPositions[v]);
+            angles.push_back(mu[v]);
+
+            if (estimateLambda) {
+                double lambda = std::copysign(phi[v], mu[v]);
+                cerr << lambda
+                     << "\t Mλ:" << lambda * geometry->vertexDualAreas[v]
+                     << "\t M^-1λ: " << lambda / geometry->vertexDualAreas[v]
+                     << endl;
+            }
+        }
+    }
+
+    auto psCloud = polyscope::registerPointCloud(name + " cones", cones);
+    auto cloudQ  = psCloud->addScalarQuantity("angle", angles);
+    // cloudQ->setEnabled(true);
+}
+
+void plotNiceSolution(bool estimateLambda = true) {
 
     if (niceCones.getMesh() != nullptr) {
 
-        ConePlacer pl(*mesh, *geometry);
-        pl.setVerbose(true);
-        VertexData<double> niceU   = pl.computeU(niceCones);
-        VertexData<double> nicePhi = pl.computePhi(niceU);
-
-        psMesh->addVertexScalarQuantity("Nice mu", niceCones);
-        psMesh->addVertexScalarQuantity("Nice u", niceU);
-        psMesh->addVertexScalarQuantity("Nice phi", nicePhi);
-
-        cerr << "total nice (interior) cone angle: "
-             << niceCones.toVector().lpNorm<1>()
-             << "\t L2 energy: " << pl.L2Energy(niceU) << endl;
-        std::vector<double> lambdaEstimates;
-        for (Vertex v : mesh->vertices()) {
-            if (abs(niceCones[v]) > 1e-8) {
-                lambdaEstimates.push_back(
-                    std::copysign(nicePhi[v], niceCones[v]));
-            }
-        }
-
-        cerr << "Lambda estimates: " << endl;
-        for (double lambda : lambdaEstimates) {
-            cerr << lambda << endl;
-        }
+        plotSolution(niceCones, "nice", estimateLambda);
     }
 }
 
@@ -71,12 +87,31 @@ void myCallback() {
         std::tie(u, phi, mu) =
             pl.computeOptimalMeasure(lambda / 100, iterations);
 
-        VertexData<double> muSparse = pl.contractClusters(mu);
 
         psMesh->addVertexScalarQuantity("u", u);
         psMesh->addVertexScalarQuantity("phi", phi);
         psMesh->addVertexScalarQuantity("mu", mu);
+
+        VertexData<double> muSparse = pl.contractClusters(mu, true);
         psMesh->addVertexScalarQuantity("muSparse", muSparse);
+
+        VertexData<double> sparseU   = pl.computeU(muSparse);
+        VertexData<double> sparsePhi = pl.computePhi(sparseU);
+
+        plotSolution(muSparse, "sparse", false, true);
+        plotNiceSolution();
+    }
+
+    static int nCones = 4;
+    ImGui::SliderInt("Number of greedy cones", &nCones, 1, 100, "iter=%.3f");
+    static int gsIterations = 12;
+    ImGui::SliderInt("Greedy Iterations", &gsIterations, 1, 20, "iter=%.3f");
+
+    if (ImGui::Button("Place Greedy Cones")) {
+        GreedyPlacer gpl(*mesh, *geometry);
+        VertexData<double> mu = gpl.niceCones(nCones, gsIterations);
+
+        plotSolution(mu, "greedy", false, true);
     }
 }
 

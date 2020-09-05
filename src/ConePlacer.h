@@ -25,7 +25,8 @@ class ConePlacer {
     std::array<VertexData<double>, 3>
     computeOptimalMeasure(double lambda = 1, size_t regularizedSteps = 4);
 
-    VertexData<double> contractClusters(const VertexData<double>& x);
+    VertexData<double> contractClusters(VertexData<double>& mu,
+                                        bool fancy = false);
 
     VertexData<double> computeU(const VertexData<double>& mu);
     VertexData<double> computePhi(const VertexData<double>& u);
@@ -33,6 +34,9 @@ class ConePlacer {
     double L2Energy(const VertexData<double>& u);
 
     void setVerbose(bool verb);
+
+    Vector<double> getInterior(const Vector<double>& vec);
+    Vector<double> getBoundary(const Vector<double>& vec);
 
   private:
     std::array<Vector<double>, 2> computeRegularizedMeasure(Vector<double> u,
@@ -87,8 +91,10 @@ class ConePlacer {
     Vector<double> extendBoundaryByZero(const Vector<double>& boundary);
     Vector<double> extendInteriorByZero(const Vector<double>& interior);
     Vector<double> extendInteriorByZero(const std::vector<double>& interior);
-    Vector<double> getInterior(const Vector<double>& vec);
-    Vector<double> getBoundary(const Vector<double>& vec);
+
+    std::pair<std::vector<Vertex>, std::vector<double>>
+    approximateCluster(const VertexData<double>& mu,
+                       const std::vector<Vertex>& cluster);
 
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;
@@ -107,3 +113,83 @@ Vector<double> stackVectors(const std::vector<Vector<double>>& vs);
 
 std::vector<Vector<double>> unstackVectors(const Vector<double>& bigV,
                                            const std::vector<size_t>& sizes);
+
+SparseMatrix<double> speye(size_t n);
+
+
+class GreedyPlacer {
+  public:
+    GreedyPlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_);
+
+    VertexData<double> niceCones(size_t nCones, size_t gaussSeidelIterations);
+
+    VertexData<double>
+    computeInitialScaleFactors(VertexData<double> vertexCurvatures);
+    VertexData<double> computeScaleFactors(VertexData<double> vertexCurvatures,
+                                           const std::vector<Vertex> cones,
+                                           int vSkip = -1);
+
+    std::vector<double> computeTargetAngles(std::vector<Vertex> cones);
+
+  protected:
+    SparseMatrix<double> Lii, Mii;
+    Vector<double> Omegaii;
+
+    size_t nInterior, nBoundary, nVertices;
+
+    ManifoldSurfaceMesh& mesh;
+    VertexPositionGeometry& geo;
+};
+
+// C is a bracket-addressable container containing elements of type T
+// F is a function taking in type T and returning type S
+// S must be comparable with >
+template <typename C, typename F,
+          typename T = typename std::remove_reference<
+              decltype((*(C*)nullptr)[(size_t)0])>::type,
+          typename S = typename std::result_of<F(T)>::type>
+inline size_t argmax(const C& container, const F& fn) {
+    size_t maxIdx  = 0;
+    size_t currIdx = 0;
+    S maxVal       = fn(container[0]);
+    for (T elem : container) {
+        S currVal = fn(elem);
+        if (currVal > maxVal) {
+            maxIdx = currIdx;
+            maxVal = currVal;
+        }
+        currIdx++;
+    }
+    return maxIdx;
+}
+
+template <typename T>
+inline size_t argmax(const VertexData<T>& data) {
+    // TODO: directly iterate over data
+    Eigen::Matrix<T, Eigen::Dynamic, 1> dataVec = data.toVector();
+    size_t currMaxIdx                           = 0;
+    T currMaxVal                                = dataVec[0];
+    for (size_t iV = 1; iV < (size_t)dataVec.size(); iV++) {
+        if (dataVec[iV] > currMaxVal) {
+            currMaxIdx = iV;
+            currMaxVal = dataVec[iV];
+        }
+    }
+    return currMaxIdx;
+}
+
+template <typename T, typename F,
+          typename S = typename std::result_of<F(T)>::type>
+inline size_t argmax(const VertexData<T>& data, const F& fn) {
+    // TODO: directly iterate over data
+    Eigen::Matrix<T, Eigen::Dynamic, 1> dataVec = data.toVector();
+    size_t currMaxIdx                           = 0;
+    S currMaxVal                                = fn(dataVec[0]);
+    for (size_t iV = 1; iV < (size_t)dataVec.size(); iV++) {
+        if (fn(dataVec[iV]) > currMaxVal) {
+            currMaxIdx = iV;
+            currMaxVal = fn(dataVec[iV]);
+        }
+    }
+    return currMaxIdx;
+}
