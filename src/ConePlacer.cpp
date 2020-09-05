@@ -200,59 +200,26 @@ void ConePlacer::setVerbose(bool verb) { verbose = verb; }
 std::array<Vector<double>, 2>
 ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
                                       double lambda, double gamma) {
-    size_t n             = mesh.nInteriorVertices();
-    double residualNorm2 = 100;
+    size_t n = mesh.nInteriorVertices();
 
-    Vector<double> ones = Vector<double>::Constant(mesh.nInteriorVertices(), 1);
+    Vector<double> b = -regularizedResidual(u, phi, lambda, gamma);
 
     size_t iter = 0;
-    while (residualNorm2 > 1e-5 && iter++ < 50) {
-        Vector<double> b = -regularizedResidual(u, phi, lambda, gamma);
-
+    while (b.norm() > 1e-5 && iter++ < 50) {
         SparseMatrix<double> DF = computeRegularizedDF(u, phi, lambda, gamma);
-        Vector<double> stackedStep = solveSquare(DF, b);
-
-        // cerr << "solve residual: " << (DF * stackedStep - b).norm() << endl;
-
+        Vector<double> stackedStep       = solveSquare(DF, b);
         std::vector<Vector<double>> step = unstackVectors(stackedStep, {n, n});
 
         u += step[0];
-        // cerr << "total step norm: " << stackedStep.norm()
-        //      << "\tu step norm: " << step[0].norm()
-        //      << "\t rhs norm: " << b.norm() << endl;
-
         phi += step[1];
-        // u   = projectOutConstant(u);
-        // phi = computePhi(u);
-        // phi = projectOutConstant(phi);
 
-        // if (u.dot(Mii * ones) > 1e-8) {
-        //     cerr << "projectOutOnes(u) failed" << endl;
-        // }
-        // if (phi.dot(Mii * ones) > 1e-8) {
-        //     cerr << "projectOutOnes(phi) failed" << endl;
-        // }
+        b = -regularizedResidual(u, phi, lambda, gamma);
 
-        // if ((Lii.transpose() * phi - Mii.transpose() * u).norm() > 1e-8) {
-        //     cerr << "projectOutOnes broke poisson equation" << endl;
-        //     // exit(1);
-        // }
-
-        residualNorm2 = step[0].squaredNorm() + step[1].squaredNorm();
         if (verbose)
-            cout << "\t\t" << iter << "\t| residual: " << residualNorm2
-                 << "\t| u norm: " << u.lpNorm<1>()
-                 << "\t| phi norm: " << phi.lpNorm<1>() << endl;
-        // exit(1);
+            cout << "\t\t" << iter << "\t| residual: " << b.norm()
+                 << "\t| u norm: " << sqrt(u.dot(Mii * u))
+                 << "\t| phi norm: " << sqrt(phi.dot(Mii * phi)) << endl;
     }
-
-
-    // auto psMesh = polyscope::getSurfaceMesh("mesh");
-    // psMesh->addVertexScalarQuantity("u", extendInteriorByZero(u));
-    // psMesh->addVertexScalarQuantity("phi", extendInteriorByZero(phi));
-    // Vector<double> mu = P(phi, lambda) / gamma;
-    // psMesh->addVertexScalarQuantity("mu", extendInteriorByZero(mu));
-    // polyscope::show();
 
     return {u, phi};
 }
@@ -260,9 +227,10 @@ ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
 std::array<VertexData<double>, 3>
 ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
                                   double lambda) {
-    Vector<double> mu    = P(phi, lambda);
-    size_t n             = mesh.nInteriorVertices();
-    double residualNorm2 = residual(u, phi, mu, lambda).lpNorm<2>();
+    Vector<double> mu = P(phi, lambda);
+    size_t n          = mesh.nInteriorVertices();
+
+    Vector<double> b = -residual(u, phi, mu, lambda);
 
     if (verbose)
         cout << "\t initial residual: "
@@ -270,36 +238,23 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
              << "\t mu norm: " << mu.lpNorm<1>() << endl;
 
     size_t iter = 0;
-    while (residualNorm2 > 1e-12 && iter++ < 1000) {
-
-        Vector<double> b = residual(u, phi, mu, lambda);
-
-        SparseMatrix<double> DF = computeDF(u, phi, mu, lambda);
-
-        SquareSolver<double> solver(DF);
-
+    while (b.norm() > 1e-12 && iter++ < 1000) {
+        SparseMatrix<double> DF    = computeDF(u, phi, mu, lambda);
+        Vector<double> stackedStep = solveSquare(DF, b);
         std::vector<Vector<double>> step =
-            unstackVectors(solver.solve(-b), {n, n, n});
+            unstackVectors(stackedStep, {n, n, n});
 
         u += step[0];
         phi += step[1];
         mu += step[2];
-        // u   = projectOutConstant(u);
-        // phi = projectOutConstant(phi);
-        // u   = computeU(mu);
-        // phi = computePhi(u);
 
-        // TODO: should I normalize mu?
-        // mu = normalizeMuSum(mu);
+        b = -residual(u, phi, mu, lambda);
 
-        residualNorm2 = step[0].squaredNorm() + step[1].squaredNorm() +
-                        step[2].squaredNorm();
         if (verbose)
-            cout << "\t" << iter << "\t| residual: " << residualNorm2
-                 << "\t u norm: " << u.lpNorm<1>()
-                 << "\t phi norm: " << phi.lpNorm<1>()
-                 << "\t mu norm: " << mu.lpNorm<1>()
-                 << "\t step2 norm: " << step[2].lpNorm<1>() << endl;
+            cout << "\t\t" << iter << "\t| residual: " << b.norm()
+                 << "\t| u norm: " << sqrt(u.dot(Mii * u))
+                 << "\t| phi norm: " << sqrt(phi.dot(Mii * phi))
+                 << "\t mu norm: " << mu.lpNorm<1>() << endl;
     }
 
     Vector<double> r = residual(u, phi, mu, lambda);
@@ -311,9 +266,6 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
         cout << "\t 1^T M phi: " << ones.dot(Mii * phi) << endl;
         cout << "\t 1^T (Omega - mu): " << ones.dot(Omegaii - mu) << endl;
     }
-
-    checkSubdifferential(mu, phi, lambda);
-    // checkPhiIsEnergyGradient(mu, phi, lambda);
 
     auto assignInteriorVertices = [&](const Vector<double>& vec) {
         VertexData<double> data(mesh, 0);
@@ -336,40 +288,11 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
     VertexData<double> muData(mesh, Omega - L * fullU);
 
     if (verbose) {
-        Vector<double> uErr = Lii * u - Omegaii + mu;
-        cerr << "u err: " << uErr.norm() << endl;
-
-        Vector<double> computedU = computeU(mu);
-        cerr << "computed u residual: "
-             << (Lii * computedU - Omegaii + mu).norm() << endl;
-        cerr << "solved u err (compared to solution u): "
-             << (computedU - u).norm() << endl;
-        cerr << "Lii * solved u err: " << (Lii * (computedU - u)).norm()
-             << endl;
-        for (size_t iV = 0; iV < fmin(10, computedU.size()); ++iV)
-            cerr << computedU(iV) << "\t" << u(iV) << "\t"
-                 << computedU(iV) - u(iV) << endl;
-
-        Vector<double> ones = Vector<double>::Constant(uErr.rows(), 1);
-
-        cerr << "u . ones : " << u.dot(ones)
-             << "\t computedU . ones: " << computedU.dot(ones) << endl;
-
         double netConeAngle = muData.toVector().sum();
-        cerr << "net cone angle: " << netConeAngle
-             << "\t 2 pi chi: " << 2 * M_PI * mesh.eulerCharacteristic()
-             << endl;
+        cerr << "net cone angle: " << netConeAngle << endl;
         cerr << "total (interior) cone angle: " << mu.lpNorm<1>()
              << "\t L2 energy: " << 0.5 * u.dot(Mii * u) << endl;
-        // SparseMatrix<double> DF = computeDF(u, phi, mu, lambda);
-        // Eigen::SparseQR<SparseMatrix<double>, Eigen::COLAMDOrdering<int>> lu;
-        // lu.compute(DF);
-        // cerr << "DF nullity = " << DF.rows() - lu.rank() << endl;
-        // lu.compute(Lii);
-        // cerr << "Lii nullity = " << Lii.rows() - lu.rank() << endl;
-        // cerr << "Lii * ones norm:" << (Lii * ones).norm() << endl;
     }
-
 
     return {uData, phiData, muData};
 }
@@ -422,17 +345,6 @@ SparseMatrix<double> ConePlacer::computeRegularizedDF(const Vector<double>& u,
     return verticalStack<double>({top, bot});
 }
 
-double ConePlacer::muSum(const Vector<double>& mu) {
-    double sum = 0;
-    for (size_t iV = 0; iV < (size_t)mu.rows(); ++iV) sum += mu(iV);
-    return sum;
-}
-
-Vector<double> ConePlacer::normalizeMuSum(const Vector<double>& mu) {
-    double targetSum = 2 * M_PI * mesh.eulerCharacteristic();
-    return targetSum / muSum(mu) * mu;
-}
-
 Vector<double> ConePlacer::P(Vector<double> x, double lambda) {
     for (size_t iV = 0; iV < (size_t)x.rows(); ++iV) {
         x(iV) = fmax(0, x(iV) - lambda) + fmin(0, x(iV) + lambda);
@@ -468,108 +380,6 @@ std::vector<double> ConePlacer::Dvec(const Vector<double>& x, double lambda) {
     return result;
 }
 
-bool ConePlacer::checkSubdifferential(const Vector<double>& mu,
-                                      const Vector<double>& phi,
-                                      double lambda) {
-    // Check F-R subdifferential
-    Vector<double> psi(mesh.nInteriorVertices());
-    for (size_t iV = 0; iV < mesh.nInteriorVertices(); ++iV) {
-        psi(iV) = (mu(iV) > 0) ? lambda : -lambda;
-    }
-
-    // Subdifferential condition says for all psi, mu(psi) <= mu(phi)
-    double err = mu.dot(psi) - mu.dot(phi);
-
-    if (err > 1e-8) {
-        cerr << "Not a subdifferential after all" << endl;
-    } else {
-        cerr << "Subdifferential okay" << endl;
-    }
-
-    // Check abstract subdifferential
-    double Rmu = lambda * mu.lpNorm<1>();
-
-    err = abs(Rmu - mu.dot(phi));
-
-    if (err > 1e-8) {
-        cerr << "Not an abstract subdifferential after all" << endl;
-    } else {
-        cerr << "Abstract subdifferential okay" << endl;
-    }
-
-    // Check discrete subdifferential
-    // Minimizers of e(μ) + |μ|_1 satisfy
-    // φ \in \partial λ|μ|_1 (since φ = -grad e),
-    // which means that φ_i = λ sgn(μ_i) for μ_i nonzero
-    double worstErr = 0;
-    for (size_t iV = 0; iV < (size_t)mu.rows(); ++iV) {
-        if (abs(mu(iV)) > 1e-12) {
-            err      = phi(iV) - std::copysign(lambda, mu(iV));
-            worstErr = fmax(abs(err), worstErr);
-        }
-    }
-    if (worstErr > 1e-8) {
-        cerr << "Discrete subdifferential fails" << endl;
-    } else {
-        cerr << "Discrete subdifferential okay" << endl;
-    }
-
-    return true;
-}
-
-double ConePlacer::checkPhiIsEnergyGradient(const Vector<double>& mu,
-                                            const Vector<double>& phi,
-                                            double lambda, double epsilon) {
-    double worstErr = 0;
-    double L2Err    = 0;
-    double muEnergy = computeDistortionEnergy(mu, lambda);
-    if (abs(muEnergy - Lagrangian(mu, computeU(mu), phi)) > 1e-8) {
-        cerr << "Error in Lagrangian" << endl;
-    } else {
-        cerr << "Lagrangian Okay" << endl;
-    }
-
-    Vector<double> standardizedPhi = projectOutConstant(phi);
-
-    Vector<double> finiteDifferenceGradient(mu.rows());
-    for (size_t iV = 0; iV < (size_t)mu.rows(); ++iV) {
-        Vector<double> dmu = Vector<double>::Zero(mu.rows());
-        dmu(iV)            = epsilon;
-
-        double perturbedEnergy  = computeDistortionEnergy(mu + dmu, lambda);
-        double finiteDifference = (perturbedEnergy - muEnergy) / epsilon;
-        finiteDifferenceGradient(iV) = finiteDifference;
-
-        double err = abs(phi(iV) + finiteDifference);
-
-        if (iV < 10 && verbose && err > 1e-4) {
-            cout << "finiteDifference: " << finiteDifference
-                 << "\tphi: " << phi(iV)
-                 << "\tstandardized phi: " << standardizedPhi(iV) << endl;
-        }
-
-        worstErr = fmax(worstErr, err);
-
-        L2Err += err * err;
-    }
-
-    L2Err = sqrt(L2Err / mu.rows());
-    if (verbose) {
-        Vector<double> ones = Vector<double>::Constant(mu.rows(), 1);
-        cout << "worst phi err: " << worstErr << "\t l2 err: " << L2Err << endl;
-        cout << "1^T M * finite difference grad / norm = "
-             << ones.dot(Mii * finiteDifferenceGradient) /
-                    finiteDifferenceGradient.norm()
-             << endl;
-        cout << "1^T * finite difference grad = "
-             << ones.dot(finiteDifferenceGradient) /
-                    finiteDifferenceGradient.norm()
-             << endl;
-    }
-
-    return worstErr;
-}
-
 Vector<double> ConePlacer::computePhi(const Vector<double>& u) {
     Vector<double> rhs  = Mii * u;
     Vector<double> ones = Vector<double>::Constant(u.rows(), 1);
@@ -595,7 +405,6 @@ Vector<double> ConePlacer::computePhi(const Vector<double>& u) {
     }
 
     return phi;
-    // return projectOutConstant(phi);
 }
 
 Vector<double> ConePlacer::computeU(const Vector<double>& mu) {
@@ -606,7 +415,6 @@ Vector<double> ConePlacer::computeU(const Vector<double>& mu) {
     }
 
     Vector<double> u = Liisolver->solve(rhs);
-    // u                = projectOutConstant(u);
 
     Vector<double> residual = Lii * u - rhs;
     if (residual.norm() / rhs.norm() > 1e-4) {
@@ -614,37 +422,12 @@ Vector<double> ConePlacer::computeU(const Vector<double>& mu) {
              << residual.norm() / rhs.norm() << endl;
     }
     return u;
-    // return projectOutConstant(u);
-}
-
-Vector<double> ConePlacer::projectOutConstant(const Vector<double>& vec) {
-    Vector<double> ones = Vector<double>::Constant(vec.rows(), 1);
-    double s            = ones.dot(Mii * vec) / ones.dot(Mii * ones);
-
-    Vector<double> newVec = vec - s * ones;
-
-    double err = ones.dot(Mii * newVec);
-    if (abs(err) / newVec.norm() > 1e-4) {
-        cerr << "projectOutConstant failed? err " << err << " and relative err "
-             << err / newVec.norm() << ". s = " << s
-             << "\t old constant part: " << ones.dot(Mii * vec)
-             << "\t total surface area: " << ones.dot(Mii * ones) << endl;
-    }
-
-    return vec - s * ones;
 }
 
 double ConePlacer::computeDistortionEnergy(const Vector<double>& mu,
                                            double lambda) {
     Vector<double> u = computeU(mu);
     return 0.5 * u.transpose() * Mii * u;
-}
-
-double ConePlacer::Lagrangian(const Vector<double>& mu, const Vector<double>& u,
-                              const Vector<double>& phi) {
-    // L = u^T M u - φ^T L u + φ^T Ω - φ^T μ
-    return 0.5 * u.dot(Mii * u) - phi.dot(Lii * u) + phi.dot(Omegaii) -
-           phi.dot(mu);
 }
 
 std::array<Vector<double>, 2>

@@ -65,24 +65,11 @@ class ConePlacer {
     SparseMatrix<double> D(const Vector<double>& x, double lambda);
     std::vector<double> Dvec(const Vector<double>& x, double lambda);
 
-    double muSum(const Vector<double>& mu);
-    Vector<double> normalizeMuSum(const Vector<double>& mu);
-
     Vector<double> P(Vector<double> x, double lambda);
-
-    bool checkSubdifferential(const Vector<double>& mu,
-                              const Vector<double>& phi, double lambda);
-
-    double checkPhiIsEnergyGradient(const Vector<double>& mu,
-                                    const Vector<double>& phi, double lambda,
-                                    double epsilon = 1e-6);
 
     Vector<double> computePhi(const Vector<double>& u);
     Vector<double> computeU(const Vector<double>& mu);
-    Vector<double> projectOutConstant(const Vector<double>& vec);
     double computeDistortionEnergy(const Vector<double>& mu, double lambda);
-    double Lagrangian(const Vector<double>& mu, const Vector<double>& u,
-                      const Vector<double>& phi);
 
     std::array<Vector<double>, 2>
     splitInteriorBoundary(const Vector<double>& vec);
