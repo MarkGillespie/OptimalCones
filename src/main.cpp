@@ -69,6 +69,9 @@ void plotNiceSolution(bool estimateLambda = true) {
     }
 }
 
+// Nice cones on Rhino: diffuse for 12-12 seconds, set cluster tol = 1e-8, set
+// lambda = 0.09 (/100)
+
 // A user-defined callback, for creating control panels (etc)
 // Use ImGUI commands to build whatever you want here, see
 // https://github.com/ocornut/imgui/blob/master/imgui.h
@@ -98,7 +101,8 @@ void myCallback() {
         VertexData<double> sparseU   = pl.computeU(muSparse);
         VertexData<double> sparsePhi = pl.computePhi(sparseU);
 
-        plotSolution(muSparse, "sparse", false, true);
+        plotSolution(mu, "all cones", false, true);
+        // plotSolution(muSparse, "sparse", false, true);
         plotNiceSolution();
     }
 

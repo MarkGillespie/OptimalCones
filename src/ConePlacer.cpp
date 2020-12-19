@@ -23,8 +23,8 @@ ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
     Lii = Ldecomp.AA;
     Lib = Ldecomp.AB;
 
-    geo.requireVertexLumpedMassMatrix();
-    SparseMatrix<double> M = geo.vertexLumpedMassMatrix;
+    geo.requireVertexGalerkinMassMatrix();
+    SparseMatrix<double> M = geo.vertexGalerkinMassMatrix;
     BlockDecompositionResult<double> Mdecomp =
         blockDecomposeSquare(M, isInterior);
     Mii = Mdecomp.AA;
@@ -76,13 +76,14 @@ VertexData<double> ConePlacer::contractClusters(VertexData<double>& mu,
     if (fancy) {
         // Diffuse mu slightly to smooth it out
         geo.requireMeshLengthScale();
+        double dt = 1e-12;
         // double dt = 1e-8;
-        double dt = 1e-6 * geo.meshLengthScale;
+        // double dt = 1e-6 * geo.meshLengthScale;
 
         geo.requireCotanLaplacian();
-        geo.requireVertexLumpedMassMatrix();
+        geo.requireVertexGalerkinMassMatrix();
         const SparseMatrix<double>& L = geo.cotanLaplacian;
-        const SparseMatrix<double>& M = geo.vertexLumpedMassMatrix;
+        const SparseMatrix<double>& M = geo.vertexGalerkinMassMatrix;
 
         geo.requireVertexDualAreas();
         Vector<double> MinvMu = mu.toVector();
@@ -107,7 +108,7 @@ VertexData<double> ConePlacer::contractClusters(VertexData<double>& mu,
                                                                    mu);
     }
 
-    double tol = 1e-12;
+    double tol = 1e-8;
     VertexData<bool> visited(mesh, false);
     VertexData<double> contracted(mesh, 0);
 
@@ -555,8 +556,8 @@ GreedyPlacer::GreedyPlacer(ManifoldSurfaceMesh& mesh_,
 
     Lii = Ldecomp.AA;
 
-    geo.requireVertexLumpedMassMatrix();
-    SparseMatrix<double> M = geo.vertexLumpedMassMatrix;
+    geo.requireVertexGalerkinMassMatrix();
+    SparseMatrix<double> M = geo.vertexGalerkinMassMatrix;
     BlockDecompositionResult<double> Mdecomp =
         blockDecomposeSquare(M, isInterior);
     Mii = Mdecomp.AA;
