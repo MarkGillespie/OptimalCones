@@ -22,7 +22,7 @@ class ConePlacer {
   public:
     ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_);
 
-    std::array<VertexData<double>, 3>
+    std::array<VertexData<double>, 4>
     computeOptimalMeasure(double lambda = 1, size_t regularizedSteps = 4);
 
     VertexData<double> contractClusters(VertexData<double>& mu,
@@ -38,27 +38,34 @@ class ConePlacer {
     Vector<double> getInterior(const Vector<double>& vec);
     Vector<double> getBoundary(const Vector<double>& vec);
 
+    double p, q;
+
   private:
-    std::array<Vector<double>, 2> computeRegularizedMeasure(Vector<double> u,
+    std::array<Vector<double>, 3>
+    computeRegularizedMeasure(Vector<double> x, Vector<double> u,
+                              Vector<double> phi, double lambda, double gamma);
+
+    std::array<VertexData<double>, 4> computeOptimalMeasure(Vector<double> x,
+                                                            Vector<double> u,
                                                             Vector<double> phi,
-                                                            double lambda,
-                                                            double gamma);
+                                                            double lambda);
 
-    std::array<VertexData<double>, 3>
-    computeOptimalMeasure(Vector<double> u, Vector<double> phi, double lambda);
+    Vector<double> residual(const Vector<double>& x, const Vector<double>& u,
+                            const Vector<double>& phi, const Vector<double>& mu,
+                            double lambda);
 
-    Vector<double> residual(const Vector<double>& u, const Vector<double>& phi,
-                            const Vector<double>& mu, double lambda);
-
-    Vector<double> regularizedResidual(const Vector<double>& u,
+    Vector<double> regularizedResidual(const Vector<double>& x,
+                                       const Vector<double>& u,
                                        const Vector<double>& phi, double lambda,
                                        double gamma);
 
-    SparseMatrix<double> computeDF(const Vector<double>& u,
+    SparseMatrix<double> computeDF(const Vector<double>& x,
+                                   const Vector<double>& u,
                                    const Vector<double>& phi,
                                    const Vector<double>& mu, double lambda);
 
-    SparseMatrix<double> computeRegularizedDF(const Vector<double>& u,
+    SparseMatrix<double> computeRegularizedDF(const Vector<double>& x,
+                                              const Vector<double>& u,
                                               const Vector<double>& phi,
                                               double lambda, double gamma);
 

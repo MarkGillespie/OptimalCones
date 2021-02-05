@@ -86,8 +86,8 @@ void myCallback() {
         ConePlacer pl(*mesh, *geometry);
         pl.setVerbose(true);
 
-        VertexData<double> u, phi, mu;
-        std::tie(u, phi, mu) =
+        VertexData<double> x, u, phi, mu;
+        std::tie(x, u, phi, mu) =
             pl.computeOptimalMeasure(lambda / 100, iterations);
 
 

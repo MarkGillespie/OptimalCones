@@ -2,6 +2,9 @@
 
 ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
     : mesh(mesh_), geo(geo_) {
+    p = 1.1;
+    q = (p - 1.) / p;
+
     vIdx = mesh.getVertexIndices();
 
     isInterior = Vector<bool>(mesh.nVertices());
@@ -43,7 +46,7 @@ ConePlacer::ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_)
     }
 }
 
-std::array<VertexData<double>, 3>
+std::array<VertexData<double>, 4>
 ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
     if (verbose) cout << "Computing Optimal Cones with λ = " << lambda << endl;
 
@@ -55,6 +58,7 @@ ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
 
     if (verbose) cout << "\t\tafter normalization, λ = " << lambda << endl;
 
+    Vector<double> x   = Vector<double>::Constant(mesh.nInteriorVertices(), 0);
     Vector<double> u   = Vector<double>::Constant(mesh.nInteriorVertices(), 0);
     Vector<double> phi = Vector<double>::Constant(mesh.nInteriorVertices(), 0);
     double gamma       = 1;
@@ -62,13 +66,14 @@ ConePlacer::computeOptimalMeasure(double lambda, size_t regularizedSteps) {
     if (verbose) cout << "Beginning Regularized Solves" << endl;
 
     for (size_t iS = 0; iS < regularizedSteps; ++iS) {
-        std::tie(u, phi) = computeRegularizedMeasure(u, phi, lambda, gamma);
+        std::tie(x, u, phi) =
+            computeRegularizedMeasure(x, u, phi, lambda, gamma);
         gamma /= 10;
         if (verbose) cout << "\tFinished iteration " << iS << endl;
     }
 
     if (verbose) cout << "Beginning Exact Solve" << endl;
-    return computeOptimalMeasure(u, phi, lambda);
+    return computeOptimalMeasure(x, u, phi, lambda);
 }
 
 VertexData<double> ConePlacer::contractClusters(VertexData<double>& mu,
@@ -198,58 +203,32 @@ double ConePlacer::L2Energy(const VertexData<double>& u) {
 
 void ConePlacer::setVerbose(bool verb) { verbose = verb; }
 
-std::array<Vector<double>, 2>
-ConePlacer::computeRegularizedMeasure(Vector<double> u, Vector<double> phi,
-                                      double lambda, double gamma) {
-    size_t n = mesh.nInteriorVertices();
-
-    Vector<double> b = -regularizedResidual(u, phi, lambda, gamma);
-
-    size_t iter = 0;
-    while (b.norm() > 1e-5 && iter++ < 50) {
-        SparseMatrix<double> DF = computeRegularizedDF(u, phi, lambda, gamma);
-        Vector<double> stackedStep       = solveSquare(DF, b);
-        std::vector<Vector<double>> step = unstackVectors(stackedStep, {n, n});
-
-        u += step[0];
-        phi += step[1];
-
-        b = -regularizedResidual(u, phi, lambda, gamma);
-
-        if (verbose)
-            cout << "\t\t" << iter << "\t| residual: " << b.norm()
-                 << "\t| u norm: " << sqrt(u.dot(Mii * u))
-                 << "\t| phi norm: " << sqrt(phi.dot(Mii * phi)) << endl;
-    }
-
-    return {u, phi};
-}
-
-std::array<VertexData<double>, 3>
-ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
-                                  double lambda) {
+std::array<VertexData<double>, 4>
+ConePlacer::computeOptimalMeasure(Vector<double> x, Vector<double> u,
+                                  Vector<double> phi, double lambda) {
     Vector<double> mu = P(phi, lambda);
     size_t n          = mesh.nInteriorVertices();
 
-    Vector<double> b = -residual(u, phi, mu, lambda);
+    Vector<double> b = -residual(x, u, phi, mu, lambda);
 
     if (verbose)
         cout << "\t initial residual: "
-             << residual(u, phi, mu, lambda).lpNorm<2>()
+             << residual(x, u, phi, mu, lambda).lpNorm<2>()
              << "\t mu norm: " << mu.lpNorm<1>() << endl;
 
     size_t iter = 0;
     while (b.norm() > 1e-12 && iter++ < 1000) {
-        SparseMatrix<double> DF    = computeDF(u, phi, mu, lambda);
+        SparseMatrix<double> DF    = computeDF(x, u, phi, mu, lambda);
         Vector<double> stackedStep = solveSquare(DF, b);
         std::vector<Vector<double>> step =
-            unstackVectors(stackedStep, {n, n, n});
+            unstackVectors(stackedStep, {n, n, n, n});
 
-        u += step[0];
-        phi += step[1];
-        mu += step[2];
+        x += step[0];
+        u += step[1];
+        phi += step[2];
+        mu += step[3];
 
-        b = -residual(u, phi, mu, lambda);
+        b = -residual(x, u, phi, mu, lambda);
 
         if (verbose)
             cout << "\t\t" << iter << "\t| residual: " << b.norm()
@@ -258,7 +237,7 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
                  << "\t mu norm: " << mu.lpNorm<1>() << endl;
     }
 
-    Vector<double> r = residual(u, phi, mu, lambda);
+    Vector<double> r = residual(x, u, phi, mu, lambda);
     if (verbose) {
         cout << "\t final residual: " << r.lpNorm<2>() << endl;
 
@@ -279,6 +258,7 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
         return data;
     };
 
+    VertexData<double> xData   = assignInteriorVertices(x);
     VertexData<double> uData   = assignInteriorVertices(u);
     VertexData<double> phiData = assignInteriorVertices(phi);
 
@@ -295,18 +275,11 @@ ConePlacer::computeOptimalMeasure(Vector<double> u, Vector<double> phi,
              << "\t L2 energy: " << 0.5 * u.dot(Mii * u) << endl;
     }
 
-    return {uData, phiData, muData};
+    return {xData, uData, phiData, muData};
 }
 
-Vector<double> ConePlacer::regularizedResidual(const Vector<double>& u,
-                                               const Vector<double>& phi,
-                                               double lambda, double gamma) {
-    Vector<double> r0 = Lii * u - Omegaii + P(phi, lambda) / gamma;
-    Vector<double> r1 = Lii.transpose() * phi - Mii * u;
-    return stackVectors({r0, r1});
-}
-
-Vector<double> ConePlacer::residual(const Vector<double>& u,
+Vector<double> ConePlacer::residual(const Vector<double>& x,
+                                    const Vector<double>& u,
                                     const Vector<double>& phi,
                                     const Vector<double>& mu, double lambda) {
     Vector<double> r0 = Lii * u - Omegaii + mu;
@@ -315,7 +288,8 @@ Vector<double> ConePlacer::residual(const Vector<double>& u,
     return stackVectors({r0, r1, r2});
 }
 
-SparseMatrix<double> ConePlacer::computeDF(const Vector<double>& u,
+SparseMatrix<double> ConePlacer::computeDF(const Vector<double>& x,
+                                           const Vector<double>& u,
                                            const Vector<double>& phi,
                                            const Vector<double>& mu,
                                            double lambda) {
@@ -334,16 +308,76 @@ SparseMatrix<double> ConePlacer::computeDF(const Vector<double>& u,
     return verticalStack<double>({top, mid, bot});
 }
 
-SparseMatrix<double> ConePlacer::computeRegularizedDF(const Vector<double>& u,
+std::array<Vector<double>, 3>
+ConePlacer::computeRegularizedMeasure(Vector<double> x, Vector<double> u,
+                                      Vector<double> phi, double lambda,
+                                      double gamma) {
+    size_t n = mesh.nInteriorVertices();
+
+    Vector<double> b = -regularizedResidual(x, u, phi, lambda, gamma);
+    cerr << "b norm: " << b.norm() << endl;
+
+    size_t iter = 0;
+    while (b.norm() > 1e-5 && iter++ < 50) {
+        SparseMatrix<double> DF =
+            computeRegularizedDF(x, u, phi, lambda, gamma);
+        Vector<double> stackedStep = solveSquare(DF, b);
+        cout << "step norm: " << stackedStep.norm() << endl;
+        std::vector<Vector<double>> step =
+            unstackVectors(stackedStep, {n, n, n});
+
+        x += step[0];
+        u += step[1];
+        phi += step[1];
+
+        b = -regularizedResidual(x, u, phi, lambda, gamma);
+
+        if (verbose)
+            cout << "\t\t" << iter << "\t| residual: " << b.norm()
+                 << "\t| x l1 norm: " << (Mii * x).lpNorm<1>()
+                 << "\t| phi norm: " << sqrt(phi.dot(Mii * phi)) << endl;
+    }
+    if (b.norm() > 1e-5) {
+        std::cerr << "Optimization failed" << std::endl;
+        exit(1);
+    }
+
+    return {x, u, phi};
+}
+
+Vector<double> ConePlacer::regularizedResidual(const Vector<double>& x,
+                                               const Vector<double>& u,
+                                               const Vector<double>& phi,
+                                               double lambda, double gamma) {
+    Vector<double> r0 = Lii * u - Omegaii + P(phi, lambda) / gamma;
+    Vector<double> r1 = u - P(x, 1.) / gamma;
+    Vector<double> r2 = Lii.transpose() * phi - Mii * x;
+    cerr << "r0 norm: " << r0.norm() << "\tr1 norm: " << r1.norm()
+         << "\tr2 norm: " << r2.norm() << endl;
+    return stackVectors({r0, r1, r2});
+}
+
+SparseMatrix<double> ConePlacer::computeRegularizedDF(const Vector<double>& x,
+                                                      const Vector<double>& u,
                                                       const Vector<double>& phi,
                                                       double lambda,
                                                       double gamma) {
+    SparseMatrix<double> zeros(mesh.nInteriorVertices(),
+                               mesh.nInteriorVertices());
+    SparseMatrix<double> eye(mesh.nInteriorVertices(),
+                             mesh.nInteriorVertices());
+    eye.setIdentity();
+
     SparseMatrix<double> topRight = D(phi, lambda) / gamma;
+    SparseMatrix<double> midLeft  = -Lii * D(Mii * x, 1) * Mii / gamma;
+    SparseMatrix<double> midRight = Lii * D(Mii * x, 1) * Mii / gamma;
 
-    SparseMatrix<double> top = horizontalStack<double>({Lii, topRight});
-    SparseMatrix<double> bot = horizontalStack<double>({-Mii, Lii.transpose()});
 
-    return verticalStack<double>({top, bot});
+    auto top = horizontalStack<double>({zeros, Lii, topRight});
+    auto mid = horizontalStack<double>({midLeft, eye, zeros});
+    auto bot = horizontalStack<double>({-Mii, zeros, Lii.transpose()});
+
+    return verticalStack<double>({top, mid, bot});
 }
 
 Vector<double> ConePlacer::P(Vector<double> x, double lambda) {
