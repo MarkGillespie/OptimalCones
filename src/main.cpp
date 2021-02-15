@@ -36,8 +36,8 @@ void plotSolution(const VertexData<double>& mu, std::string name,
     psMesh->addVertexScalarQuantity(name + " u", u);
     psMesh->addVertexScalarQuantity(name + " phi", phi);
 
-    cerr << "total " << name << " (interior) cone angle: "
-         << pl.getInterior(mu.toVector()).lpNorm<1>()
+    cerr << "total " << name
+         << " (interior) cone angle: " << (mu.toVector()).lpNorm<1>()
          << "\t L2 energy: " << pl.L2Energy(u) << endl;
     if (estimateLambda) cerr << "Lambda estimates: " << endl;
     geometry->requireVertexDualAreas();
@@ -104,18 +104,6 @@ void myCallback() {
         plotSolution(mu, "all cones", false, true);
         // plotSolution(muSparse, "sparse", false, true);
         plotNiceSolution();
-    }
-
-    static int nCones = 4;
-    ImGui::SliderInt("Number of greedy cones", &nCones, 1, 100, "iter=%.3f");
-    static int gsIterations = 12;
-    ImGui::SliderInt("Greedy Iterations", &gsIterations, 1, 20, "iter=%.3f");
-
-    if (ImGui::Button("Place Greedy Cones")) {
-        GreedyPlacer gpl(*mesh, *geometry);
-        VertexData<double> mu = gpl.niceCones(nCones, gsIterations);
-
-        plotSolution(mu, "greedy", false, true);
     }
 }
 

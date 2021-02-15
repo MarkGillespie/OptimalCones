@@ -35,9 +35,6 @@ class ConePlacer {
 
     void setVerbose(bool verb);
 
-    Vector<double> getInterior(const Vector<double>& vec);
-    Vector<double> getBoundary(const Vector<double>& vec);
-
   private:
     std::array<Vector<double>, 2> computeRegularizedMeasure(Vector<double> u,
                                                             Vector<double> phi,
@@ -71,14 +68,6 @@ class ConePlacer {
     Vector<double> computeU(const Vector<double>& mu);
     double computeDistortionEnergy(const Vector<double>& mu, double lambda);
 
-    std::array<Vector<double>, 2>
-    splitInteriorBoundary(const Vector<double>& vec);
-    Vector<double> combineInteriorBoundary(const Vector<double>& interior,
-                                           const Vector<double>& boundary);
-    Vector<double> extendBoundaryByZero(const Vector<double>& boundary);
-    Vector<double> extendInteriorByZero(const Vector<double>& interior);
-    Vector<double> extendInteriorByZero(const std::vector<double>& interior);
-
     std::pair<std::vector<Vertex>, std::vector<double>>
     approximateCluster(const VertexData<double>& mu,
                        const std::vector<Vertex>& cluster);
@@ -86,12 +75,11 @@ class ConePlacer {
     ManifoldSurfaceMesh& mesh;
     VertexPositionGeometry& geo;
     VertexData<size_t> vIdx;
-    SparseMatrix<double> Lii, Lib, Mii;
-    std::unique_ptr<PositiveDefiniteSolver<double>> Liisolver;
-    Vector<double> Omegaii;
+    SparseMatrix<double> L, M;
+    std::unique_ptr<PositiveDefiniteSolver<double>> Lsolver;
+    Vector<double> Omega;
 
-    Vector<bool> isInterior;
-    size_t nInterior, nBoundary, nVertices;
+    size_t nVertices;
 
     bool verbose = false;
 };
@@ -102,32 +90,6 @@ std::vector<Vector<double>> unstackVectors(const Vector<double>& bigV,
                                            const std::vector<size_t>& sizes);
 
 SparseMatrix<double> speye(size_t n);
-
-
-class GreedyPlacer {
-  public:
-    GreedyPlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_);
-
-    VertexData<double> niceCones(size_t nCones, size_t gaussSeidelIterations);
-
-    VertexData<double>
-    computeInitialScaleFactors(VertexData<double> vertexCurvatures);
-    VertexData<double> computeScaleFactors(VertexData<double> vertexCurvatures,
-                                           const std::vector<Vertex> cones,
-                                           int vSkip = -1);
-
-    std::vector<double> computeTargetAngles(std::vector<Vertex> cones);
-
-  protected:
-    SparseMatrix<double> Lii, Mii;
-    Vector<double> Omegaii;
-
-    size_t nInterior, nBoundary, nVertices;
-
-    ManifoldSurfaceMesh& mesh;
-    VertexPositionGeometry& geo;
-};
-
 // C is a bracket-addressable container containing elements of type T
 // F is a function taking in type T and returning type S
 // S must be comparable with >
