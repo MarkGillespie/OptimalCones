@@ -3,6 +3,7 @@
 #include "geometrycentral/surface/vertex_position_geometry.h"
 
 #include "ConePlacer.h"
+#include "bff.h"
 
 #include "polyscope/point_cloud.h"
 #include "polyscope/polyscope.h"
@@ -27,7 +28,8 @@ void plotSolution(const VertexData<double>& mu, std::string name,
 
     std::vector<Vector3> cones;
     std::vector<double> angles;
-    ConePlacer pl(*mesh, *geometry);
+    VertexData<double> zeros(*mesh, 0);
+    ConePlacer pl(*mesh, *geometry, zeros);
     pl.setVerbose(true);
     VertexData<double> u   = pl.computeU(mu);
     VertexData<double> phi = pl.computePhi(u);
@@ -69,6 +71,48 @@ void plotNiceSolution(bool estimateLambda = true) {
     }
 }
 
+float lambda   = 0.5;
+int iterations = 15;
+void placeCones() {
+    /*
+      BFF bff(*mesh, *geometry);
+      VertexData<Vector2> flattening = bff.flattenMAD();
+
+      psMesh->addVertexParameterizationQuantity("bff", flattening);
+      // polyscope::show();
+
+      VertexData<Vector3> flatEmbedding(*mesh);
+      auto to3D = [](Vector2 v) { return Vector3{v.x, v.y, 0}; };
+      for (Vertex v : mesh->vertices()) {
+          flatEmbedding[v] = to3D(flattening[v]);
+      }
+      VertexPositionGeometry flatGeo(*mesh, flatEmbedding);
+    */
+
+    // ConePlacer pl(*mesh, flatGeo, bff.u);
+    VertexData<double> zeros(*mesh, 0);
+    ConePlacer pl(*mesh, *geometry, zeros);
+    pl.setVerbose(true);
+
+    VertexData<double> u, phi, mu;
+    std::tie(u, phi, mu) = pl.computeOptimalMeasure(lambda / 100, iterations);
+
+
+    psMesh->addVertexScalarQuantity("u", u);
+    psMesh->addVertexScalarQuantity("phi", phi);
+    psMesh->addVertexScalarQuantity("mu", mu);
+
+    VertexData<double> muSparse = pl.contractClusters(mu, true);
+    psMesh->addVertexScalarQuantity("muSparse", muSparse);
+
+    VertexData<double> sparseU   = pl.computeU(muSparse);
+    VertexData<double> sparsePhi = pl.computePhi(sparseU);
+
+    plotSolution(mu, "all cones", false, true);
+    // plotSolution(muSparse, "sparse", false, true);
+    plotNiceSolution();
+}
+
 // Nice cones on Rhino: diffuse for 12-12 seconds, set cluster tol = 1e-8, set
 // lambda = 0.09 (/100)
 
@@ -76,34 +120,10 @@ void plotNiceSolution(bool estimateLambda = true) {
 // Use ImGUI commands to build whatever you want here, see
 // https://github.com/ocornut/imgui/blob/master/imgui.h
 void myCallback() {
-    static float lambda = 0.5;
-    ImGui::SliderFloat("lambda", &lambda, 0.f, 1.f, "lambda=%.3f");
-
-    static int iterations = 12;
+    ImGui::SliderFloat("lambda", &lambda, 0.f, 10.f, "lambda=%.3f");
     ImGui::SliderInt("iterations", &iterations, 1, 20, "iter=%.3f");
-
     if (ImGui::Button("Place Cones")) {
-        ConePlacer pl(*mesh, *geometry);
-        pl.setVerbose(true);
-
-        VertexData<double> u, phi, mu;
-        std::tie(u, phi, mu) =
-            pl.computeOptimalMeasure(lambda / 100, iterations);
-
-
-        psMesh->addVertexScalarQuantity("u", u);
-        psMesh->addVertexScalarQuantity("phi", phi);
-        psMesh->addVertexScalarQuantity("mu", mu);
-
-        VertexData<double> muSparse = pl.contractClusters(mu, true);
-        psMesh->addVertexScalarQuantity("muSparse", muSparse);
-
-        VertexData<double> sparseU   = pl.computeU(muSparse);
-        VertexData<double> sparsePhi = pl.computePhi(sparseU);
-
-        plotSolution(mu, "all cones", false, true);
-        // plotSolution(muSparse, "sparse", false, true);
-        plotNiceSolution();
+        placeCones();
     }
 
     static int nCones = 4;
@@ -198,6 +218,8 @@ int main(int argc, char** argv) {
         }
         plotNiceSolution();
     }
+
+    placeCones();
 
     // Give control to the polyscope gui
     polyscope::show();

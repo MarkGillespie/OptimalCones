@@ -20,7 +20,8 @@ using Eigen::Dynamic;
 
 class ConePlacer {
   public:
-    ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_);
+    ConePlacer(ManifoldSurfaceMesh& mesh_, VertexPositionGeometry& geo_,
+               const VertexData<double>& shift);
 
     std::array<VertexData<double>, 3>
     computeOptimalMeasure(double lambda = 1, size_t regularizedSteps = 4);
@@ -66,6 +67,7 @@ class ConePlacer {
     std::vector<double> Dvec(const Vector<double>& x, double lambda);
 
     Vector<double> P(Vector<double> x, double lambda);
+    Vector<double> Proj(Vector<double> x, double lambda);
 
     Vector<double> computePhi(const Vector<double>& u);
     Vector<double> computeU(const Vector<double>& mu);
@@ -88,7 +90,7 @@ class ConePlacer {
     VertexData<size_t> vIdx;
     SparseMatrix<double> Lii, Lib, Mii;
     std::unique_ptr<PositiveDefiniteSolver<double>> Liisolver;
-    Vector<double> Omegaii;
+    Vector<double> Omegaii, shiftii;
 
     Vector<bool> isInterior;
     size_t nInterior, nBoundary, nVertices;

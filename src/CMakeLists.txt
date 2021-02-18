@@ -10,6 +10,7 @@ add_executable(
   main.cpp
   ConePlacer.h
   ConePlacer.cpp
+  BFF.cpp
 )
 target_include_directories(run PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 target_link_libraries(run polyscope geometry-central)
