@@ -189,6 +189,18 @@ int main(int argc, char** argv) {
     std::tie(mesh, geometry) = loadMesh(filename);
     std::cout << "Genus: " << mesh->genus() << std::endl;
 
+    BFF bff(*mesh, *geometry);
+    VertexData<Vector2> param = bff.flattenMAD();
+
+    // Register the mesh with polyscope
+    psMesh = polyscope::registerSurfaceMesh(
+        "mesh", geometry->inputVertexPositions, mesh->getFaceVertexList(),
+        polyscopePermutations(*mesh));
+
+    psMesh->addVertexParameterizationQuantity("bff", param);
+    polyscope::show();
+    return 0;
+
     // Rescale to have unit surface area
     double surfaceArea = 0;
     geometry->requireFaceAreas();
